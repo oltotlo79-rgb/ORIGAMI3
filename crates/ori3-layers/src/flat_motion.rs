@@ -305,6 +305,12 @@ impl ResolvedPart {
     }
 }
 
+/// Opt-in, read-only trace for diagnosing face lineage and crease settlement.
+/// The normal path does not construct trace collections or change any decision.
+pub(crate) fn motion_trace_enabled() -> bool {
+    std::env::var_os("ORI3_TRACE_FLAT_MOTION").is_some_and(|value| value == "1")
+}
+
 pub(crate) fn run_motion(
     cp: &CreasePattern,
     faces: &[Face],
@@ -323,6 +329,12 @@ pub(crate) fn run_motion(
         return Err("動かす紙が指定されていません".to_string());
     }
 
+    if motion_trace_enabled() {
+        eprintln!(
+            "MOTION_TRACE input kind={:?} order={:?} parts={:?}",
+            input.kind, state.order, input.parts
+        );
+    }
     let vpos = vertex_positions(cp);
     let polygon = |f: &Face| -> Vec<DVec2> {
         f.vertices
@@ -505,6 +517,17 @@ pub(crate) fn run_motion(
         }
     }
 
+    if motion_trace_enabled() {
+        for face in &new_faces {
+            eprintln!(
+                "MOTION_TRACE lineage face={} vertices={:?} parent={:?} part={:?}",
+                face.id,
+                face.vertices,
+                parent_of.get(&face.id),
+                part_of.get(&face.id)
+            );
+        }
+    }
     // 4. 新しい重なり順(下→上)を各部分の turn から組み立てる
     let order = build_order(&new_faces, &parts, &parent_of, &part_of, &old_rank);
 
@@ -542,6 +565,14 @@ pub(crate) fn run_motion(
         &parent_of,
     ));
 
+    if motion_trace_enabled() {
+        let mut reported_angles: Vec<_> = angles.iter().collect();
+        reported_angles.sort_by_key(|(id, _)| **id);
+        eprintln!(
+            "MOTION_TRACE result kind={:?} order={order:?} angles={reported_angles:?} added={added:?} warnings={warnings:?}",
+            input.kind
+        );
+    }
     let new_state = FlatState { placements, order };
     let layer_points = new_state.to_layer_points(&work, &new_faces);
     let step = FoldStep {
@@ -1065,6 +1096,13 @@ fn build_order(
         if block.is_empty() {
             continue;
         }
+        if motion_trace_enabled() {
+            eprintln!(
+                "MOTION_TRACE build_order part={i} turn={:?} reverse={} before={order:?} block={block:?}",
+                part.turn,
+                part.reverse.unwrap_or(part.iso.mirrored)
+            );
+        }
         if part.reverse.unwrap_or(part.iso.mirrored) {
             block.reverse();
         }
@@ -1136,6 +1174,11 @@ fn build_order(
                     })
                     .map(|(k, _)| k)
                     .collect();
+                if motion_trace_enabled() {
+                    eprintln!(
+                        "MOTION_TRACE beside part={i} anchor={anchor} direction={direction:?} slots={slots:?} reversed_block={block:?}"
+                    );
+                }
                 let at = match direction {
                     FoldDirection::Up => slots.last().map(|k| k + 1),
                     FoldDirection::Down => slots.first().copied(),
@@ -1158,6 +1201,9 @@ fn build_order(
                     },
                 }
             }
+        }
+        if motion_trace_enabled() {
+            eprintln!("MOTION_TRACE build_order_done part={i} order={order:?}");
         }
     }
     order
@@ -1289,6 +1335,14 @@ fn settle_creases(context: CreaseSettlementContext<'_>) -> HashMap<EdgeId, f64> 
             continue;
         };
         let want = want_kind(nra, nrb, npa.mirrored);
+        if motion_trace_enabled() {
+            eprintln!(
+                "MOTION_TRACE settle edge={eid} endpoints={:?} faces={fs:?} parents=({pa},{pb}) kind={:?} folded={folded} want={want:?} added={} rank=({nra},{nrb})",
+                [v0, v1],
+                e.kind,
+                added.contains(&eid)
+            );
+        }
 
         if pa == pb {
             // この動きで新しく引いた折り線。重なり順に合わせた山谷にそろえる
@@ -1321,6 +1375,12 @@ fn settle_creases(context: CreaseSettlementContext<'_>) -> HashMap<EdgeId, f64> 
             continue;
         }
         let before = want_kind(ora, orb, opa.mirrored);
+        if motion_trace_enabled() {
+            eprintln!(
+                "MOTION_TRACE prior edge={eid} was_folded={was_folded} prior_want={before:?} prior_rank=({ora},{orb}) flip={}",
+                before != want
+            );
+        }
         if before != want {
             // 重なり順か向きが変わったので山谷が入れ替わる。もとの線種が重なり順と
             // 食い違っていた場合もそのずれを保つよう、反転で書き換える。
@@ -1328,6 +1388,9 @@ fn settle_creases(context: CreaseSettlementContext<'_>) -> HashMap<EdgeId, f64> 
             fixes.push((eid, Some(now), Some(angle_of(now))));
             angles.insert(eid, angle_of(now));
         }
+    }
+    if motion_trace_enabled() {
+        eprintln!("MOTION_TRACE fixes {fixes:?}");
     }
     for (eid, kind, angle) in fixes {
         let Some(e) = work.edges.iter_mut().find(|e| e.id == eid) else {

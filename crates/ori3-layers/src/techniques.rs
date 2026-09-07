@@ -408,6 +408,12 @@ pub fn squash(
     } else {
         FoldDirection::Up
     };
+    if crate::flat_motion::motion_trace_enabled() {
+        eprintln!(
+            "MOTION_TRACE squash line={:?} reference={:?} flap={flap:?} spine={:?} pairs={:?} pivot={pivot:?} tip={tip:?} s_dir={s_dir:?} c_dir={c_dir:?} alpha={alpha:e} angle_eps={ANGLE_EPS:e} near={near:?} far={far:?} anchored={anchored} open={open:?}",
+            input.line, input.reference_point, spine.edges, spine.pairs
+        );
+    }
     let parts = if spine.curve_ends.is_some() {
         let polys = flap_polygons(cp, faces, state, &state.order);
         curved_squash_parts(CurvedSquashInput {
@@ -615,6 +621,16 @@ pub fn petal(
         FoldDirection::Up
     };
     let pockets = petal_pockets(cp, faces, state, &flap, l0, u);
+    if crate::flat_motion::motion_trace_enabled() {
+        let wings: Vec<_> = sides
+            .iter()
+            .map(|wing| (wing.angle, wing.reach, &wing.neighbors))
+            .collect();
+        eprintln!(
+            "MOTION_TRACE petal line={:?} reference={:?} flap={flap:?} tip={tip:?} far={far:?} hinge={:?} wings={wings:?} pockets={pockets:?} open={open:?} guessed={guessed}",
+            input.line, input.reference_point, geometry.hinge
+        );
+    }
     let parts = petal_parts(PetalPartsInput {
         pockets: &pockets,
         polygons: &polys,
@@ -2204,6 +2220,11 @@ fn squash_parts(input: StraightSquashInput<'_>) -> Vec<MotionPart> {
     } = input;
     // 退化ケース: 背が向きを変えないので紙は動かない(重なり順と山谷だけが変わる)
     if alpha.abs() <= ANGLE_EPS {
+        if crate::flat_motion::motion_trace_enabled() {
+            eprintln!(
+                "MOTION_TRACE squash_parts branch=restack alpha={alpha:e} angle_eps={ANGLE_EPS:e} flap={flap:?}"
+            );
+        }
         return vec![MotionPart::restack(flap.to_vec(), LayerTurn::Outside(open))];
     }
     let seg = |dir: DVec2| [[pivot.x, pivot.y], [pivot.x + dir.x, pivot.y + dir.y]];
@@ -2867,6 +2888,13 @@ fn petal_pockets(
             continue;
         };
         let on_center = |p: DVec2| u.perp_dot(pl.apply(p) - l0).abs() <= JOIN_EPS;
+        if crate::flat_motion::motion_trace_enabled() {
+            eprintln!(
+                "MOTION_TRACE pocket_edge edge={} faces={fs:?} separator={}",
+                e.id,
+                on_center(p0) && on_center(p1)
+            );
+        }
         if on_center(p0) && on_center(p1) {
             continue;
         }

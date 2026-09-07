@@ -839,6 +839,82 @@ pub fn validate_precrease_layer_order(
     validate_precrease_layer_order_impl(cp, faces, placements, candidate_order, &HashSet::new())
 }
 
+/// Validate a flat endpoint using its actual signed hinge angles, not the CP's final M/V.
+/// Missing hinges mean 0 degrees, as in propagation. Geometry still includes every material
+/// seam; a zero angle cannot remove a folded seam or excuse an inconsistent placement.
+pub fn validate_precrease_layer_order_at_angles(
+    cp: &CreasePattern,
+    faces: &[Face],
+    placements: &HashMap<FaceId, Isometry2>,
+    angles: &HashMap<EdgeId, f64>,
+    candidate_order: &[FaceId],
+) -> Result<PrecreaseOrderValidation, String> {
+    let posed = crease_pattern_for_flat_angles(cp, faces, placements, angles)?;
+    validate_precrease_layer_order(&posed, faces, placements, candidate_order)
+}
+
+/// Diagnose the general stack rules of a flat endpoint from actual signed hinge angles.
+pub fn diagnose_precrease_layer_order_at_angles(
+    cp: &CreasePattern,
+    faces: &[Face],
+    placements: &HashMap<FaceId, Isometry2>,
+    angles: &HashMap<EdgeId, f64>,
+) -> Result<PrecreaseStackDiagnosis, String> {
+    let posed = crease_pattern_for_flat_angles(cp, faces, placements, angles)?;
+    diagnose_precrease_layer_order(&posed, faces, placements).map_err(|error| error.to_string())
+}
+
+/// A constraint-only copy: callers must retain the original material faces, including zero
+/// angle seams. Never persist this copy or extract a new face graph from its temporary kinds.
+pub(crate) fn crease_pattern_for_flat_angles(
+    cp: &CreasePattern,
+    faces: &[Face],
+    placements: &HashMap<FaceId, Isometry2>,
+    angles: &HashMap<EdgeId, f64>,
+) -> Result<CreasePattern, String> {
+    let owners = edge_owners(faces);
+    let mut posed = cp.clone();
+    let endpoint_epsilon = crate::fold_target::COMPLETE_FOLD_ENDPOINT_EPS_DEG;
+    for edge in &mut posed.edges {
+        let Some(incident) = owners.get(&edge.id).filter(|owners| owners.len() == 2) else {
+            continue;
+        };
+        let angle = angles.get(&edge.id).copied().unwrap_or(0.0);
+        if !angle.is_finite() {
+            return Err(format!(
+                "non-finite actual hinge angle for edge {}",
+                edge.id
+            ));
+        }
+        let (kind, folded) = if angle.abs() <= endpoint_epsilon {
+            (EdgeKind::Aux, false)
+        } else if (angle - 180.0).abs() <= endpoint_epsilon {
+            (EdgeKind::Mountain, true)
+        } else if (angle + 180.0).abs() <= endpoint_epsilon {
+            (EdgeKind::Valley, true)
+        } else {
+            return Err(format!(
+                "actual hinge {} is not a flat endpoint: {angle}",
+                edge.id
+            ));
+        };
+        let first = placements
+            .get(&incident[0])
+            .ok_or("missing first hinge placement")?;
+        let second = placements
+            .get(&incident[1])
+            .ok_or("missing second hinge placement")?;
+        if (first.mirrored != second.mirrored) != folded {
+            return Err(format!(
+                "actual hinge {} disagrees with its flat placements",
+                edge.id
+            ));
+        }
+        edge.kind = kind;
+    }
+    Ok(posed)
+}
+
 /// Product-internal operation-aware validation core.
 ///
 /// `operation_edges` are not dropped from the physical model: the book-fold operation replaces

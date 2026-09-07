@@ -6,12 +6,12 @@
 //! # 折り鶴の折り順(正本CP上の粗い3手)
 //!
 //! 折り鶴の展開図は利用者が渡した正本(114辺・56頂点・59面)を正とする。
-//! [`crane`] はその正本の driver 102本を3手へ分けて畳む:
+//! [`crane`] は正本の102折り目を、途中の符号反転と復帰を含む3手で畳む:
 //!
-//! 1. 手0 `Simple` — 正本G1の下折り線8本(辺1,6,7,9,12,18,21,84)へ目標角0°で印だけ付ける。
+//! 1. 手0 `Simple` — 鳥段階にも含まれる下折り線8本(辺1,6,7,9,12,18,21,84)へ目標角0°で印だけ付ける。
 //!    全ての目標角が0°なので紙は平らなまま。
-//! 2. 手A `Petal` — 正本G1〜G3の34辺を一度に畳んで**鳥の基本形**にする。
-//! 3. 手B `InsideReverse` — 残るG4〜G9の68辺を一度に畳んで完成させる。首・尾・頭の
+//! 2. 手A `Petal` — 正本の39辺を一度に畳んで**鳥の基本形**にする。
+//! 3. 手B `InsideReverse` — 残り63辺と符号を戻す2辺の65 driverで完成させる。首・尾・頭の
 //!    中割りが中心なので、この手に完成形の正本layer oracleを保存する。
 //!
 //! # 基本形そのものを見る検査が使う工程
@@ -395,6 +395,7 @@ fn assert_display_order(doc: &Document, label: &str) {
 /// (表向きの面から見て谷なら相手は上、山なら下)。
 fn assert_fold_senses(doc: &Document, label: &str) {
     let (faces, state) = state_of(doc);
+    let actual = replay(doc, doc.sequence.len(), 1.0).hinge_angles;
     let mut edge_faces: HashMap<u32, Vec<FaceId>> = HashMap::new();
     for f in faces {
         let mut ids = f.edges.clone();
@@ -421,10 +422,14 @@ fn assert_fold_senses(doc: &Document, label: &str) {
         if pa.mirrored == pb.mirrored {
             continue;
         }
-        let above = matches!(
-            (e.kind, pa.mirrored),
-            (EdgeKind::Valley, false) | (EdgeKind::Mountain, true)
-        );
+        // The same crease may reverse between stages; check the actual signed endpoint.
+        let angle = actual[&e.id];
+        assert!((angle.abs() - 180.0).abs() < ori3_model::EPS);
+        let above = if pa.mirrored {
+            angle > 0.0
+        } else {
+            angle < 0.0
+        };
         let ia = state.order.iter().position(|&id| id == a).unwrap();
         let ib = state.order.iter().position(|&id| id == b).unwrap();
         checked += 1;
@@ -545,12 +550,12 @@ fn bird_base() -> Document {
     doc
 }
 
-/// 折り鶴。正本CP(114辺・56頂点・59面)の driver 102本を粗い3手へ分けて畳む。
+/// 折り鶴。正本CP(114辺・56頂点・59面)の102折り目を、符号反転と復帰を含む粗い3手で畳む。
 ///
-/// - 手0 `Simple`: 正本G1の下折り線8本(辺1,6,7,9,12,18,21,84)へ目標角0°で印を付けるだけ。
+/// - 手0 `Simple`: 鳥段階にも含まれる下折り線8本(辺1,6,7,9,12,18,21,84)へ目標角0°で印を付けるだけ。
 ///   全ての目標角が0°なので紙は平らなまま。
-/// - 手A `Petal`: 正本G1〜G3の34辺を一度に畳んで鳥の基本形にする。
-/// - 手B `InsideReverse`: 残るG4〜G9の68辺を一度に畳んで完成させる。首・尾・頭の
+/// - 手A `Petal`: 正本の39辺を一度に畳んで鳥の基本形にする。
+/// - 手B `InsideReverse`: 残り63辺と符号を戻す2辺の65 driverで完成させる。首・尾・頭の
 ///   中割りが中心なので、この手に完成形の正本layer oracleを保存する。
 ///
 /// 戻り値は文書と、3手を平坦再生して得た平坦状態(再生一致の検証に使う)。
@@ -562,11 +567,13 @@ fn crane() -> (Document, FlatState) {
     let canonical_step = doc.sequence.pop().expect("正本一括collapse 1手");
     let final_layer_order = canonical_step.layer_order.clone();
 
-    let g1 = BTreeSet::from([1_u32, 6, 7, 9, 12, 18, 21, 84]);
+    let precrease_edges = BTreeSet::from([1_u32, 6, 7, 9, 12, 18, 21, 84]);
     let bird_base_edges = BTreeSet::from([
-        0_u32, 1, 4, 6, 7, 8, 9, 11, 12, 15, 18, 21, 22, 27, 31, 40, 41, 46,
-        47, 52, 55, 58, 62, 63, 72, 73, 81, 82, 84, 85, 101, 102, 103, 104,
+        0, 1, 4, 6, 7, 8, 9, 11, 12, 15, 18, 21, 22, 27, 29, 31, 40, 41, 46, 47, 50, 51, 52, 55,
+        58, 62, 63, 72, 73, 81, 82, 84, 85, 101, 102, 103, 104, 107, 108,
     ]);
+    let reversed_in_bird = BTreeSet::from([51, 108]);
+    assert!(precrease_edges.is_subset(&bird_base_edges));
     let canonical_drivers = canonical_step
         .drivers
         .iter()
@@ -583,10 +590,10 @@ fn crane() -> (Document, FlatState) {
         .collect::<Vec<_>>();
     assert_eq!(canonical_drivers.len(), 102, "正本driverは102本");
 
-    // 手0: G1の下折り線へ印だけ付ける。全目標角が0°なので紙は平らなまま。
+    // 手0: 8辺は全て39辺に含まれるので、従来の0度の下折り線を維持する。
     let precrease_drivers = canonical_drivers
         .iter()
-        .filter(|(edge, _)| g1.contains(edge))
+        .filter(|(edge, _)| precrease_edges.contains(edge))
         .map(|(_, driver)| {
             let mut driver = driver.clone();
             driver.target_angle_deg = 0.0;
@@ -600,16 +607,24 @@ fn crane() -> (Document, FlatState) {
         layer_order: None,
         alignment: None,
         finish_soft: None,
-        note: "正本G1の下折り線を付けて開く".to_string(),
+        note: "鳥段階にも含まれる下折り線を付けて開く".to_string(),
         technique_classification: None,
     });
 
-    // 手A: G1〜G3の34辺を一度に畳む花弁折り相当で、鳥の基本形にする。
+    // 手A: 両面の花弁折りに相当する39辺の同時collapseなのでPetalを維持する。
     let bird_base_drivers = canonical_drivers
         .iter()
         .filter(|(edge, _)| bird_base_edges.contains(edge))
-        .map(|(_, driver)| driver.clone())
-        .collect();
+        .map(|(edge, driver)| {
+            let mut driver = driver.clone();
+            // G1cの全体SAT解: 対角線全体を谷にするため51/108だけ完成形から反転する。
+            if reversed_in_bird.contains(edge) {
+                driver.target_angle_deg = -180.0;
+            }
+            driver
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(bird_base_drivers.len(), 39, "正本辺の最小SAT鳥段階");
     doc.sequence.push(FoldStep {
         id: 1,
         kind: TechniqueKind::Petal,
@@ -617,15 +632,39 @@ fn crane() -> (Document, FlatState) {
         layer_order: None,
         alignment: None,
         finish_soft: None,
-        note: "正本G1〜G3の鳥の基本形".to_string(),
+        note: "正本39辺の鳥の基本形".to_string(),
         technique_classification: None,
     });
 
-    // 手B: 残るG4〜G9の68辺を一度に畳む。首・尾・頭の中割りが中心なので
+    // 保存順は完成形のoracleを流用せず、この端点の実角から全一般規則を解く。
+    let bird_faces = extract_faces(&doc.cp);
+    let (bird_state, _) = flat_state_at(&doc, &bird_faces, 2).expect("鳥段階の平坦配置");
+    let bird_angles = replay(&doc, 2, 1.0).hinge_angles;
+    let diagnosis = ori3_layers::precrease_collapse::diagnose_precrease_layer_order_at_angles(
+        &doc.cp,
+        &bird_faces,
+        &bird_state.placements,
+        &bird_angles,
+    )
+    .expect("鳥段階の実角から一般規則を求める");
+    let ori3_layers::precrease_collapse::PrecreaseStackSatisfiability::Sat { order } =
+        diagnosis.satisfiability
+    else {
+        panic!("39辺の鳥段階には全一般規則を満たす順が存在する");
+    };
+    doc.sequence[1].layer_order = Some(
+        FlatState {
+            placements: bird_state.placements,
+            order,
+        }
+        .to_layer_points(&doc.cp, &bird_faces),
+    );
+
+    // 手B: 残り63辺と51/108の符号復帰を合わせた65 driver。中割りが中心なので
     // 既存kindはInsideReverseとし、完成形の正本layer oracleを保存する。
     let finish_drivers = canonical_drivers
         .iter()
-        .filter(|(edge, _)| !bird_base_edges.contains(edge))
+        .filter(|(edge, _)| !bird_base_edges.contains(edge) || reversed_in_bird.contains(edge))
         .map(|(_, driver)| driver.clone())
         .collect();
     doc.sequence.push(FoldStep {
@@ -635,10 +674,11 @@ fn crane() -> (Document, FlatState) {
         layer_order: final_layer_order,
         alignment: None,
         finish_soft: None,
-        note: "正本G4〜G9の完成".to_string(),
+        note: "正本の完成形".to_string(),
         technique_classification: None,
     });
 
+    assert_eq!(doc.sequence[2].drivers.len(), 65, "残り63辺と2辺の符号復帰");
     let faces = extract_faces(&doc.cp);
     let (state, _) =
         flat_state_at(&doc, &faces, doc.sequence.len()).expect("正本CPの粗い3手を平坦再生");
@@ -1111,6 +1151,309 @@ fn crane_is_deterministic() {
     assert_eq!(a.sequence, b.sequence, "手順が一致する");
     let frame = |doc: &Document| format!("{:?}", replay(doc, doc.sequence.len(), 1.0).frame);
     assert_eq!(frame(&a), frame(&b), "折り上がりの3D姿勢がビット一致する");
+    let faces = extract_faces(&a.cp);
+    for stage in [2, 3] {
+        let first = ori3_layers::replay::replay_endpoint_with_faces_uncached(&a, &faces, stage);
+        let angles = |values: &HashMap<u32, f64>| {
+            values
+                .iter()
+                .map(|(&edge, &angle)| (edge, angle.to_bits()))
+                .collect::<BTreeMap<_, _>>()
+        };
+        for _ in 0..10 {
+            let repeated =
+                ori3_layers::replay::replay_endpoint_with_faces_uncached(&a, &faces, stage);
+            assert_eq!(
+                format!("{:?}", first.frame),
+                format!("{:?}", repeated.frame)
+            );
+            assert_eq!(angles(&first.hinge_angles), angles(&repeated.hinge_angles));
+        }
+        println!("crane replay stage={stage} uncached bit matches=10/10");
+    }
+}
+
+/// The intermediate bird has its own signed angles and stack; the completed CP is unchanged.
+#[test]
+fn canonical_bird_endpoint_uses_actual_angles() {
+    use ori3_layers::precrease_collapse::{
+        PrecreaseStackSatisfiability, diagnose_precrease_layer_order_at_angles,
+        validate_precrease_layer_order, validate_precrease_layer_order_at_angles,
+    };
+    let (doc, completed) = crane();
+    let canonical = traditional_crane_collapse_work().document;
+    assert_eq!(doc.cp, canonical.cp);
+    assert_eq!(doc.sequence[0].drivers.len(), 8);
+    assert_eq!(doc.sequence[1].drivers.len(), 39);
+    assert_eq!(doc.sequence[2].drivers.len(), 65);
+    let faces = extract_faces(&doc.cp);
+    let (state, flat_warnings) = flat_state_at(&doc, &faces, 2).expect("bird flat endpoint");
+    let mut shown = replay(&doc, 2, 1.0);
+    println!(
+        "bird actual converged={} rms={:e} warnings={:?} frame_warnings={:?}",
+        shown.converged, shown.closure_rms, shown.warnings, shown.frame.warnings
+    );
+    assert!(flat_warnings.is_empty());
+    assert!(shown.warnings.is_empty());
+    assert!(shown.frame.warnings.is_empty());
+    assert!(shown.skipped.is_empty());
+    assert!(shown.converged);
+    assert!(!shown.best_effort);
+    // A SAT flat endpoint does not promote the conflicting raw rank to geometric authority.
+    assert!(shown.surface_order_provenance.is_none());
+    assert!(max_seam_gap(&doc.cp, &faces, &shown.frame) < 1e-6);
+    assert!(self_intersection_pairs(&shown.frame).is_empty());
+    assert_eq!(
+        shown
+            .hinge_angles
+            .values()
+            .filter(|&&angle| angle > 90.0)
+            .count(),
+        28
+    );
+    assert_eq!(
+        shown
+            .hinge_angles
+            .values()
+            .filter(|&&angle| angle < -90.0)
+            .count(),
+        11
+    );
+    let border = doc
+        .cp
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == EdgeKind::Border)
+        .flat_map(|edge| [edge.v0, edge.v1])
+        .collect::<BTreeSet<_>>();
+    let positions = vertex_pos(&doc.cp);
+    let mut interior = 0;
+    for vertex in doc
+        .cp
+        .vertices
+        .iter()
+        .filter(|vertex| !border.contains(&vertex.id))
+    {
+        let mut rays = doc
+            .cp
+            .edges
+            .iter()
+            .filter(|edge| edge.v0 == vertex.id || edge.v1 == vertex.id)
+            .filter(|edge| {
+                shown
+                    .hinge_angles
+                    .get(&edge.id)
+                    .is_some_and(|angle| angle.abs() > 90.0)
+            })
+            .map(|edge| {
+                let other = if edge.v0 == vertex.id {
+                    edge.v1
+                } else {
+                    edge.v0
+                };
+                let direction = positions[&other] - DVec2::from(vertex.pos);
+                (direction.y.atan2(direction.x), shown.hinge_angles[&edge.id])
+            })
+            .collect::<Vec<_>>();
+        if rays.is_empty() {
+            continue;
+        }
+        interior += 1;
+        rays.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let difference = rays
+            .iter()
+            .map(|(_, angle)| if *angle > 0.0 { 1_i32 } else { -1 })
+            .sum::<i32>();
+        assert_eq!(difference.abs(), 2, "Maekawa at vertex {}", vertex.id);
+        let sectors = (0..rays.len())
+            .map(|i| (rays[(i + 1) % rays.len()].0 - rays[i].0).rem_euclid(std::f64::consts::TAU))
+            .collect::<Vec<_>>();
+        assert!(
+            (sectors.iter().step_by(2).sum::<f64>() - std::f64::consts::PI).abs() < ori3_model::EPS
+        );
+        for i in 0..rays.len() {
+            if sectors[i] + ori3_model::EPS < sectors[(i + rays.len() - 1) % rays.len()]
+                && sectors[i] + ori3_model::EPS < sectors[(i + 1) % rays.len()]
+            {
+                assert!(
+                    rays[i].1 * rays[(i + 1) % rays.len()].1 < 0.0,
+                    "big-little-big at {}",
+                    vertex.id
+                );
+            }
+        }
+    }
+    assert_eq!(interior, 28);
+    let diagnosis = diagnose_precrease_layer_order_at_angles(
+        &doc.cp,
+        &faces,
+        &state.placements,
+        &shown.hinge_angles,
+    )
+    .unwrap();
+    assert!(matches!(
+        diagnosis.satisfiability,
+        PrecreaseStackSatisfiability::Sat { .. }
+    ));
+    assert_eq!(diagnosis.mandatory_constraints.len(), 191);
+    let saved = ori3_layers::saved_layer_order_at(&doc, &faces, 2, 1.0)
+        .expect("independently solved bird stack");
+    // The completed declaration differs at exactly these two hinges; it cannot validate this pose.
+    let wrong = validate_precrease_layer_order(&doc.cp, &faces, &state.placements, &saved).unwrap();
+    assert_eq!(
+        wrong
+            .violations
+            .adjacent_folds
+            .iter()
+            .map(|rule| rule.0)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([51, 108])
+    );
+    assert!(ori3_layers::prefer_saved_order_when_rank_conflicts(
+        &doc,
+        &faces,
+        2,
+        &mut shown.frame,
+        &saved
+    ));
+    let mut rank = shown
+        .frame
+        .faces
+        .iter()
+        .map(|face| (face.surface_rank, face.face))
+        .collect::<Vec<_>>();
+    rank.sort_unstable();
+    let order = rank.into_iter().map(|(_, face)| face).collect::<Vec<_>>();
+    let checked = validate_precrease_layer_order_at_angles(
+        &doc.cp,
+        &faces,
+        &state.placements,
+        &shown.hinge_angles,
+        &order,
+    )
+    .unwrap();
+    assert!(checked.is_valid());
+    assert!(checked.discarded_relations.is_empty());
+    for invalid in [0.0, 179.0, f64::NAN] {
+        let mut angles = shown.hinge_angles.clone();
+        angles.insert(51, invalid);
+        assert!(
+            validate_precrease_layer_order_at_angles(
+                &doc.cp,
+                &faces,
+                &state.placements,
+                &angles,
+                &order
+            )
+            .is_err()
+        );
+    }
+
+    let markers = |document: &Document, material_faces: &[Face], flat: &FlatState| {
+        let positions = vertex_pos(&document.cp);
+        [
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [1.0, 1.0],
+            [0.0, 1.0],
+            [0.5, 0.5],
+            [0.5, 0.0],
+            [1.0, 0.5],
+            [0.5, 1.0],
+            [0.0, 0.5],
+        ]
+        .into_iter()
+        .map(|point| {
+            let point = DVec2::from(point);
+            let images = material_faces
+                .iter()
+                .filter(|face| {
+                    inside_polygon(
+                        &face
+                            .vertices
+                            .iter()
+                            .map(|vertex| positions[vertex])
+                            .collect::<Vec<_>>(),
+                        point,
+                    )
+                })
+                .map(|face| flat.placements[&face.id].apply(point))
+                .collect::<Vec<_>>();
+            assert!(!images.is_empty());
+            assert!(images.iter().all(|image| image.distance(images[0]) < 1e-9));
+            images[0]
+        })
+        .collect::<Vec<_>>()
+    };
+    let wanted = markers(&doc, &faces, &state);
+    let mut legacy = doc.clone();
+    legacy.sequence.truncate(2);
+    legacy.sequence[1].drivers.retain(|driver| {
+        ![29, 50, 51, 107, 108].contains(&resolve_driver_edges(&legacy.cp, driver)[0])
+    });
+    let (legacy_faces, legacy_flat) = state_of(&legacy);
+    let operation = bird_base();
+    let (operation_faces, operation_flat) = state_of(&operation);
+    for (name, points) in [
+        ("legacy34", markers(&legacy, &legacy_faces, &legacy_flat)),
+        (
+            "operation",
+            markers(&operation, &operation_faces, &operation_flat),
+        ),
+    ] {
+        let a = (points[1] - points[4]).normalize();
+        let b = (wanted[1] - wanted[4]).normalize();
+        let perpendicular = |v: DVec2| DVec2::new(-v.y, v.x);
+        let delta = [1.0, -1.0]
+            .into_iter()
+            .map(|mirror| {
+                points
+                    .iter()
+                    .zip(&wanted)
+                    .map(|(point, target)| {
+                        let d = *point - points[4];
+                        (wanted[4]
+                            + b * d.dot(a)
+                            + perpendicular(b) * (mirror * d.dot(perpendicular(a))))
+                        .distance(*target)
+                    })
+                    .fold(0.0_f64, f64::max)
+            })
+            .fold(f64::INFINITY, f64::min);
+        assert!(delta < 1e-9, "{name} nine-point delta={delta:e}");
+        for tip in [0, 2] {
+            assert!(
+                (points[tip].distance(points[4]) - wanted[tip].distance(wanted[4])).abs() < 1e-9
+            );
+        }
+        println!("bird marker match {name}: {delta:e}");
+    }
+    let mut bird_only = doc.clone();
+    bird_only.sequence.truncate(2);
+    assert_flat(&bird_only, "canonical bird");
+    assert_fold_senses(&bird_only, "canonical bird actual signs");
+    let final_actual = replay(&doc, 3, 1.0).hinge_angles;
+    let canonical_actual = replay(&canonical, 1, 1.0).hinge_angles;
+    assert_eq!(final_actual, canonical_actual);
+    let (canonical_flat, _) = flat_state_at(&canonical, &faces, 1).unwrap();
+    assert_eq!(completed.placements, canonical_flat.placements);
+    assert_eq!(completed.order, canonical_flat.order);
+    let final_checked = diagnose_precrease_layer_order_at_angles(
+        &doc.cp,
+        &faces,
+        &completed.placements,
+        &final_actual,
+    )
+    .unwrap();
+    assert!(matches!(
+        final_checked.satisfiability,
+        PrecreaseStackSatisfiability::Sat { .. }
+    ));
+    assert_eq!(final_checked.mandatory_constraints.len(), 1388);
+    assert_eq!(final_checked.counts.taco_tortilla, 1049);
+    println!(
+        "bird SAT violations=0 discarded=0 warnings=0 applied=true; final CP/angles/placements/order differences=0"
+    );
 }
 
 fn explicit_flat_frame(document: &Document, faces: &[Face], state: &FlatState) -> Frame3D {
@@ -4931,7 +5274,9 @@ fn saved_order_never_overrides_geometric_rank_across_angle_buckets() {
 /// `bird_base_without_an_authoritative_order_is_derived_before_warning` にある。
 #[test]
 fn bird_base_has_no_penetration_and_a_consistent_layer_order() {
-    let (doc, _flat) = crane();
+    let (mut doc, _flat) = crane();
+    // Keep this existing fallback test without an oracle; crane() now saves its SAT bird order.
+    doc.sequence[1].layer_order = None;
     let faces = extract_faces(&doc.cp);
     let replayed = ori3_layers::replay_with_faces(&doc, &faces, 2, 1.0);
 

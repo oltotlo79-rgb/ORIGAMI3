@@ -72,7 +72,7 @@ use crate::flat_state::FlatState;
 use crate::fold_through::{angle_of, resolve_driver_edges};
 use crate::precrease_collapse::{
     PRECREASE_ORDER_UNDETERMINED_WARNING_PREFIX, PrecreaseCollapseInput,
-    collapse_precrease_network, validate_precrease_layer_order,
+    collapse_precrease_network, validate_precrease_layer_order_at_angles,
 };
 use crate::spatial_crease_only::{CanonicalNonflatPose, FaceRigidTransform3, MaterialVertex3D};
 
@@ -146,7 +146,7 @@ pub struct ReplayResult {
     /// 閉包収束前でも、現在手順を守った有限候補を表示しているか。
     #[serde(skip)]
     pub best_effort: bool,
-    /// 表示解が閉包収束したか。
+    /// 表示解が閉包収束、または全実角・継ぎ目・一般規則の平坦端点検証を通ったか。
     #[serde(skip)]
     pub converged: bool,
     /// 接触補正専用の開始・完了層順序。IPCへは出さず、コマンド層でだけ使う。
@@ -663,7 +663,7 @@ fn replay_with_faces_impl(
         solve_along(doc, faces, path, t, warm)
     } else {
         // 完了形の物理解は従来どおりone-shotに保つ。surface順のためにsolver branchや
-        // 収束結果を変えず、下でcurrent stepのnear-final probeだけを別に求める。
+        // 物理解を変えず、下でcurrent stepのnear-final probeだけを別に求める。
         let warm: HashMap<EdgeId, f64> = plan
             .flat_exact
             .iter()
@@ -680,7 +680,13 @@ fn replay_with_faces_impl(
             Vec::new(),
         )
     };
-    if !result.converged {
+    let flat_endpoint_certificate = if t == 1.0 && plan.skipped.is_empty() {
+        certify_attained_flat_endpoint(doc, faces, &plan.flat_exact, &mut result)
+    } else {
+        None
+    };
+    let flat_endpoint_certified = flat_endpoint_certificate.is_some();
+    if !result.converged && !flat_endpoint_certified {
         warnings.push(format!(
             "手順{up_to}までの形が展開図から求まりませんでした(いちばん近い形で表示します)。一部の層だけを折る手順は、展開図からの折り直しでは正確に再現できないことがあります"
         ));
@@ -801,13 +807,36 @@ fn replay_with_faces_impl(
             }
         }
     }
+    // A newly certified flat pose may have a geometric rank that violates taco/continuity
+    // rules. Its SAT certificate proves that some stack exists, not that this rank is valid.
+    // Retain the raw geometry/rank, but never forward that conflicting rank as authority.
+    if surface_order_provenance.is_some()
+        && let Some(placements) = &flat_endpoint_certificate
+    {
+        let valid = complete_surface_order(&result.frame, faces)
+            .and_then(|order| {
+                validate_precrease_layer_order_at_angles(
+                    &doc.cp,
+                    faces,
+                    placements,
+                    &result.angles,
+                    &order,
+                )
+            })
+            .is_ok_and(|check| check.is_valid() && check.discarded_relations.is_empty());
+        if !valid {
+            surface_order_provenance = None;
+        }
+    }
     // 実current-step経路でcompleteにならない順序は、別のflat/motion経路から
     // 返却frameへ転記しない。provenance無しのまま返し、Face ID順も物理順にしない。
     let hinge_angles = result.angles;
     let relaxations = result.relaxations;
     let closure_rms = result.closure_rms;
-    let best_effort = result.best_effort;
-    let converged = result.converged;
+    // A flat stack's existence is not proof of the raw geometric surface order.
+    // Keep the solver's original convergence flag throughout the authority derivation above.
+    let best_effort = result.best_effort && !flat_endpoint_certified;
+    let converged = result.converged || flat_endpoint_certified;
     let mut frame = result.frame;
     let layer_of: HashMap<FaceId, u32> = plan
         .order
@@ -1592,7 +1621,7 @@ fn complete_surface_order(frame: &Frame3D, faces: &[Face]) -> Result<Vec<FaceId>
 /// 逆になって、見えている面の12.045546%が紙の裏になっていた(保存順では0%)。
 ///
 /// そこで表示の直前に一度だけ、刻まれた順を**候補order自身から物理制約を作らない**
-/// [`validate_precrease_layer_order`] にかける。同関数は山谷・鏡映・紙の連続性だけから
+/// [`validate_precrease_layer_order_at_angles`] にかける。同関数は山谷・鏡映・紙の連続性だけから
 /// 必然の上下を求めてから候補を読み合わせるので、保存順が自分自身を根拠に通ることはない。
 ///
 /// 刻み直すのは、刻まれた順が一般制約を**破っており**、かつ保存順が同じ検査を**通る**
@@ -1617,17 +1646,26 @@ pub fn prefer_saved_order_when_rank_conflicts(
     let Ok((state, _)) = flat_state_at(doc, faces, up_to) else {
         return false;
     };
-    let Ok(stamped_validation) =
-        validate_precrease_layer_order(&doc.cp, faces, &state.placements, &stamped_order)
-    else {
+    let actual = replay_with_faces(doc, faces, up_to, 1.0);
+    let Ok(stamped_validation) = validate_precrease_layer_order_at_angles(
+        &doc.cp,
+        faces,
+        &state.placements,
+        &actual.hinge_angles,
+        &stamped_order,
+    ) else {
         return false;
     };
     if stamped_validation.is_valid() {
         return false;
     }
-    let Ok(saved_validation) =
-        validate_precrease_layer_order(&doc.cp, faces, &state.placements, saved_order)
-    else {
+    let Ok(saved_validation) = validate_precrease_layer_order_at_angles(
+        &doc.cp,
+        faces,
+        &state.placements,
+        &actual.hinge_angles,
+        saved_order,
+    ) else {
         return false;
     };
     if !saved_validation.is_valid() {
@@ -1903,6 +1941,78 @@ fn solve_along(
         (None, None) => unreachable!("SUBSTEPSは1以上"),
     };
     (result, surface_path)
+}
+
+/// Certify an already attained flat endpoint by the flat geometry/stack contract.
+/// The generic spatial solver's 1e-13 RMS can reject CP coordinate noise even when all
+/// endpoint angles are attained. Do not change that solver tolerance or use this for a
+/// nonflat/interpolated pose: verify every hinge, seam, polygon and general stack rule.
+/// The existence of an order does not authorize stamping it into the raw replay frame.
+fn certify_attained_flat_endpoint(
+    doc: &Document,
+    faces: &[Face],
+    exact: &[Driver],
+    result: &mut ori3_rigid::SolveResult,
+) -> Option<HashMap<FaceId, Isometry2>> {
+    if result.converged || !result.relaxations.is_empty() {
+        return None;
+    }
+    let endpoint_epsilon = crate::fold_target::COMPLETE_FOLD_ENDPOINT_EPS_DEG;
+    if exact.len() != result.angles.len()
+        || exact.iter().any(|driver| {
+            result.angles.get(&driver.hinge).is_none_or(|actual| {
+                !actual.is_finite()
+                    || !driver.target_angle_deg.is_finite()
+                    || (*actual - driver.target_angle_deg).abs() > endpoint_epsilon
+            })
+        })
+    {
+        return None;
+    }
+    let folded = ori3_rigid::propagate(&doc.cp, faces, &result.angles);
+    let placements = flat_placements(faces, &folded).ok()?;
+    let posed = crate::precrease_collapse::crease_pattern_for_flat_angles(
+        &doc.cp,
+        faces,
+        &placements,
+        &result.angles,
+    )
+    .ok()?;
+    let frame = ori3_rigid::to_frame3d_geometry_only(&doc.cp, faces, &folded);
+    if !frame_geometry_matches(faces, &result.frame, &frame)
+        || !frame.warnings.is_empty()
+        || !ori3_rigid::self_intersection_pairs(&frame).is_empty()
+    {
+        return None;
+    }
+    let preferred = faces.iter().map(|face| face.id).collect::<Vec<_>>();
+    let order = crate::precrease_collapse::resolve_precrease_layer_order_with_constraints(
+        &posed,
+        faces,
+        &placements,
+        &preferred,
+        &[],
+    )
+    .ok()?;
+    let validation = validate_precrease_layer_order_at_angles(
+        &doc.cp,
+        faces,
+        &placements,
+        &result.angles,
+        &order,
+    )
+    .ok()?;
+    // This validator checks all seam residuals against the unchanged model EPS (1e-9).
+    if !validation.is_valid() || !validation.discarded_relations.is_empty() {
+        return None;
+    }
+    // Keep the attained geometry/angles and measured RMS. Only the independently disproved
+    // spatial nonconvergence warning is replaced by the successful flat certificate.
+    result
+        .frame
+        .warnings
+        .retain(|warning| !warning.starts_with("追従計算が収束していません（"));
+    Some(placements)
 }
 
 /// soft抵抗を外した最終閉包段まで行う表示solve。
@@ -2317,10 +2427,11 @@ fn verified_complete_precrease_collapse_order(
         return Some(check);
     }
 
-    let automatic_validation = match validate_precrease_layer_order(
+    let automatic_validation = match validate_precrease_layer_order_at_angles(
         &rerun_cp,
         faces,
         &rerun_state.placements,
+        &endpoint.angles,
         &rerun_state.order,
     ) {
         Ok(validation) => validation,
@@ -2337,10 +2448,11 @@ fn verified_complete_precrease_collapse_order(
             "保存された紙の重なり順が全ての紙面を一度ずつ含まないため採用しません".to_string(),
         );
     } else if let Some(saved_order) = candidate.saved_order {
-        match validate_precrease_layer_order(
+        match validate_precrease_layer_order_at_angles(
             &rerun_cp,
             faces,
             &rerun_state.placements,
+            &endpoint.angles,
             &saved_order,
         ) {
             Ok(validation) if validation.is_valid() => {
@@ -2811,10 +2923,18 @@ fn plan_steps(doc: &Document, faces: &[Face], up_to: usize, t: f64) -> StepPlan 
                 let candidate = rerun.candidate;
                 let saved_order_was_present = candidate.saved_order_was_present;
                 if let Some(candidate_order) = candidate.saved_order {
-                    match validate_precrease_layer_order(
+                    // These signed angles were regenerated by the operation and checked
+                    // against its stored drivers; invoking replay here would recurse into plan_steps.
+                    let operation_angles = candidate
+                        .edge_angles
+                        .iter()
+                        .map(|(&edge, &angle)| (edge, angle))
+                        .collect();
+                    match validate_precrease_layer_order_at_angles(
                         &rerun.cp,
                         faces,
                         &rerun.state.placements,
+                        &operation_angles,
                         &candidate_order,
                     ) {
                         Ok(validation) if validation.is_valid() => {

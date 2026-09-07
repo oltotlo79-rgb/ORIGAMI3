@@ -6684,10 +6684,10 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../ori3-layers/tests/fixtures/traditional-crane/traditional-crane-cp.ori3"
         ));
-        // 正本CPのG1〜G3。この34本を畳むと鳥の基本形になる(acceptance_crane.rsと同じ表)。
-        const BIRD_BASE_EDGES: [EdgeId; 34] = [
-            0, 1, 4, 6, 7, 8, 9, 11, 12, 15, 18, 21, 22, 27, 31, 40, 41, 46, 47, 52, 55, 58, 62,
-            63, 72, 73, 81, 82, 84, 85, 101, 102, 103, 104,
+        // G1cで証明した39辺のSAT鳥段階へ揃える。正本のCP自体は変えない。
+        const BIRD_BASE_EDGES: [EdgeId; 39] = [
+            0, 1, 4, 6, 7, 8, 9, 11, 12, 15, 18, 21, 22, 27, 29, 31, 40, 41, 46, 47, 50, 51, 52,
+            55, 58, 62, 63, 72, 73, 81, 82, 84, 85, 101, 102, 103, 104, 107, 108,
         ];
 
         let canonical: Document = serde_json::from_str(CANONICAL_CRANE).expect("正本CPを読む");
@@ -6702,9 +6702,18 @@ mod tests {
                 let edges = ori3_layers::resolve_driver_edges(&canonical.cp, driver);
                 edges.len() == 1 && wanted.contains(&edges[0])
             })
-            .cloned()
+            .map(|driver| {
+                let mut driver = driver.clone();
+                let edge = ori3_layers::resolve_driver_edges(&canonical.cp, &driver)[0];
+                // 完成形と異なる51/108を谷にするのがG1cの最小反転SAT解。
+                if [51, 108].contains(&edge) {
+                    driver.target_angle_deg = -180.0;
+                }
+                driver
+            })
             .collect::<Vec<_>>();
-        assert_eq!(bird_base_drivers.len(), 34, "鳥の基本形の折り目は34本");
+        // 旧34辺へ既存の対角線5辺を加えるため39本になる。
+        assert_eq!(bird_base_drivers.len(), 39, "SAT鳥段階の折り目は39本");
 
         let mut doc = canonical.clone();
         doc.sequence = vec![FoldStep {

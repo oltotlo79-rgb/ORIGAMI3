@@ -12,11 +12,11 @@ use ori3_layers::precrease_collapse::{
 };
 use ori3_model::{CreasePattern, DriverLine, EPS, Edge, EdgeKind, FaceId, Vertex};
 
-// Same 34 material edges as acceptance_crane::crane's second stage. Their signs come from
+// Same 39 material edges as acceptance_crane::crane's second stage. Their signs come from
 // the declared drivers below; no preferred/saved order participates in this audit.
-const BIRD_EDGES: [u32; 34] = [
-    0, 1, 4, 6, 7, 8, 9, 11, 12, 15, 18, 21, 22, 27, 31, 40, 41, 46, 47, 52, 55, 58, 62, 63, 72,
-    73, 81, 82, 84, 85, 101, 102, 103, 104,
+const BIRD_EDGES: [u32; 39] = [
+    0, 1, 4, 6, 7, 8, 9, 11, 12, 15, 18, 21, 22, 27, 29, 31, 40, 41, 46, 47, 50, 51, 52, 55, 58,
+    62, 63, 72, 73, 81, 82, 84, 85, 101, 102, 103, 104, 107, 108,
 ];
 
 fn fixture(source: &str) -> (CreasePattern, Vec<Vec<DriverLine>>) {
@@ -523,8 +523,20 @@ fn canonical_crane_and_bird_have_auditable_stack_rules() {
     let bird = full
         .into_iter()
         .filter(|(edge, _)| BIRD_EDGES.contains(edge))
+        // G1c: the entire existing diagonal closes valley; 51/108 reverse only here.
+        .map(|(edge, angle)| {
+            (
+                edge,
+                if [51, 108].contains(&edge) {
+                    -180.0
+                } else {
+                    angle
+                },
+            )
+        })
         .collect::<BTreeMap<_, _>>();
-    assert_eq!(bird.len(), 34);
+    // Five existing diagonal segments make the formerly inconsistent bird support SAT.
+    assert_eq!(bird.len(), 39);
     let center = cp
         .edges
         .iter()
@@ -532,18 +544,23 @@ fn canonical_crane_and_bird_have_auditable_stack_rules() {
         .filter(|edge| bird.contains_key(&edge.id))
         .map(|edge| edge.id)
         .collect::<BTreeSet<_>>();
-    assert_eq!(center, BTreeSet::from([7, 9, 18, 21]));
-    assert!(center.iter().all(|edge| bird[edge] > 90.0));
-    let diagnosis = audit("crane_34_edge_bird", &cp, &bird);
-    let PrecreaseStackSatisfiability::Unsat { minimal_rules } = diagnosis.satisfiability else {
-        panic!("four mountains at central vertex 4 cannot fold flat")
-    };
+    // The two diagonal rays join the four median rays: degree six, M4/V2.
+    assert_eq!(center, BTreeSet::from([7, 9, 18, 21, 29, 50]));
+    assert_eq!(center.iter().filter(|edge| bird[edge] > 90.0).count(), 4);
+    assert_eq!(center.iter().filter(|edge| bird[edge] < -90.0).count(), 2);
+    let diagnosis = audit("crane_39_edge_bird", &cp, &bird);
     assert!(
-        minimal_rules
+        diagnosis
+            .rules
             .iter()
             .flat_map(rule_edges)
             .any(|edge| center.contains(&edge))
     );
+    // Replacing the support/signs removes the old center contradiction; no MUS remains.
+    assert!(matches!(
+        diagnosis.satisfiability,
+        PrecreaseStackSatisfiability::Sat { .. }
+    ));
 }
 
 #[test]
