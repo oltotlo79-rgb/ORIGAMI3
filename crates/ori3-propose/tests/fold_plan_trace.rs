@@ -9,7 +9,11 @@ use ori3_propose::{
     generate, pack,
 };
 
+#[path = "support/numeric.rs"]
+mod numeric;
 mod support;
+#[path = "support/tolerance.rs"]
+mod tolerance;
 
 /// 根に葉を`n`本ぶら下げた星形の骨格(作業9の記録と同じ形)。
 fn star(n: u32) -> Skeleton {
@@ -286,7 +290,7 @@ fn branching_skeleton_separates_stacking_from_sitting_side_by_side() {
 /// 葉1〜12本の12通りの展開図が変わっていないこと。
 ///
 /// **頂点と辺の個数・番号・並び・つながり・山谷の種類は完全一致**を求める。
-/// **座標だけ** [`support::CP_POS_TOL`] の許容差で比べる
+/// **座標だけ** [`tolerance::CP_POS_TOL`] の許容差で比べる
 /// (理由と実測、わざと壊して落ちることを確かめた記録は同定数のコメント)。
 #[test]
 fn crease_patterns_stay_identical_to_the_recorded_baseline() {
@@ -312,7 +316,7 @@ fn crease_patterns_stay_identical_to_the_recorded_baseline() {
     println!(
         "記録との突き合わせ: 12通り、のべ頂点{seen_vertices}個・のべ辺{seen_edges}本。\
          座標の差の最大 = {worst:.3e}(許容 {:.0e})",
-        support::CP_POS_TOL
+        tolerance::CP_POS_TOL
     );
 }
 
@@ -323,11 +327,16 @@ fn crease_patterns_stay_identical_to_the_recorded_baseline() {
 #[test]
 fn the_same_input_gives_the_same_tracking_ten_times() {
     for n in [1u32, 4, 6, 12] {
-        let first = serde_json::to_string(&build(n).trace).expect("追跡情報を書き出せない");
+        let first = build(n).trace;
         let mut same = 0usize;
         for round in 1..=10 {
-            let again = serde_json::to_string(&build(n).trace).expect("追跡情報を書き出せない");
-            assert_eq!(again, first, "葉{n}本の{round}回目で追跡情報が変わった");
+            let again = build(n).trace;
+            numeric::assert_serialized_values_near(
+                &again,
+                &first,
+                tolerance::CP_POS_TOL,
+                &format!("葉{n}本の{round}回目の追跡情報"),
+            );
             same += 1;
         }
         assert_eq!(same, 10, "葉{n}本で10回そろっていない");

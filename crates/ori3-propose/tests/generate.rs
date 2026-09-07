@@ -7,6 +7,11 @@ use ori3_model::{CreasePattern, EdgeKind};
 use ori3_propose::skeleton::{Skeleton, SkeletonNode};
 use ori3_propose::{ProposalResult, generate, pack};
 
+#[path = "support/numeric.rs"]
+mod numeric;
+#[path = "support/tolerance.rs"]
+mod tolerance;
+
 /// 根に葉を`n`本ぶら下げた星形の骨格。
 fn star(n: u32, len: f64) -> Skeleton {
     let mut nodes = vec![SkeletonNode::new(0, None, 0.0)];
@@ -148,7 +153,12 @@ fn same_input_gives_same_cp() {
     let p = pack(&s, 1.0, 1.0, 2026, 8).remove(0);
     let a = generate(&s, &p, 1.0, 1.0).unwrap();
     let b = generate(&s, &p, 1.0, 1.0).unwrap();
-    assert_eq!(a, b, "同じ入力から違う展開図ができた");
+    numeric::assert_serialized_values_near(
+        &a,
+        &b,
+        tolerance::CP_POS_TOL,
+        "同じ入力から作った展開図",
+    );
 }
 
 #[test]

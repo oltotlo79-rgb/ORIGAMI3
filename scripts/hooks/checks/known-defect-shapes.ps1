@@ -285,6 +285,29 @@ function Get-LineNumber {
     return ([regex]::Matches($Text.Substring(0, $Index), "`n")).Count + 1
 }
 
+function Test-RegexIdentityAtLine {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][regex]$Regex,
+        [Parameter(Mandatory = $true)][int]$Line,
+        [Parameter(Mandatory = $true)][string]$Macro
+    )
+
+    $lines = @($Text -split "`r?`n")
+    if ($Line -lt 1 -or $Line -gt $lines.Count -or -not $lines[$Line - 1].Contains($Macro)) {
+        return $false
+    }
+    foreach ($match in $Regex.Matches($Text)) {
+        $startLine = Get-LineNumber -Text $Text -Index $match.Index
+        $endIndex = $match.Index + [Math]::Max(0, $match.Length - 1)
+        $endLine = Get-LineNumber -Text $Text -Index $endIndex
+        if ($Line -ge $startLine -and $Line -le $endLine) {
+            return $true
+        }
+    }
+    return $false
+}
+
 try {
     if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
         $RepositoryRoot = Join-Path $PSScriptRoot "..\..\.."
@@ -367,13 +390,33 @@ try {
             $allowedCount = Get-RequiredNonNegativeInteger -Object $exception -Name "allowedCount" -Context $exceptionContext
             $registeredAllowance += $allowedCount
 
-            $actualExceptionCount = 0
             $isRegexException = Test-HasProperty -Object $exception -Name "regex"
+            $hasExactLine = Test-HasProperty -Object $exception -Name "line"
+            $hasExactMacro = Test-HasProperty -Object $exception -Name "macro"
+            if ($hasExactLine -ne $hasExactMacro) {
+                throw "$exceptionContext の個別例外は line と macro の両方を指定してください: $exceptionPath"
+            }
+            if ($hasExactLine -and $allowedCount -ne 1) {
+                throw "$exceptionContext の個別例外は allowedCount=1でなければなりません: $exceptionPath"
+            }
+
+            $exceptionRegex = $null
             if ($isRegexException) {
                 $exceptionPattern = Get-RequiredString -Object $exception -Name "regex" -Context $exceptionContext
                 $exceptionRegex = New-CheckedRegex -Pattern $exceptionPattern -Context $exceptionContext
-                if ($maskedByPath.ContainsKey($exceptionPath)) {
-                    $actualExceptionCount = @($exceptionRegex.Matches([string]$maskedByPath[$exceptionPath])).Count
+            }
+
+            $actualExceptionCount = 0
+            if ($isRegexException -and $maskedByPath.ContainsKey($exceptionPath)) {
+                $actualExceptionCount = @($exceptionRegex.Matches([string]$maskedByPath[$exceptionPath])).Count
+            }
+            elseif ($hasExactLine -and $maskedByPath.ContainsKey($exceptionPath)) {
+                $exactLineForCount = Get-RequiredNonNegativeInteger -Object $exception -Name "line" -Context $exceptionContext
+                $exactMacroForCount = Get-RequiredString -Object $exception -Name "macro" -Context $exceptionContext
+                $exactLinesForCount = @(([string]$maskedByPath[$exceptionPath]) -split "`r?`n")
+                if ($exactLineForCount -ge 1 -and $exactLineForCount -le $exactLinesForCount.Count -and
+                    $exactLinesForCount[$exactLineForCount - 1].Contains($exactMacroForCount)) {
+                    $actualExceptionCount = 1
                 }
             }
             elseif ($rawByPath.ContainsKey($exceptionPath)) {
@@ -385,15 +428,7 @@ try {
                 Write-Output "[NG] $id の許可例外が増加しました: $exceptionPath は $allowedCount 件まで、現在 $actualExceptionCount 件。"
             }
 
-            $hasExactLine = Test-HasProperty -Object $exception -Name "line"
-            $hasExactMacro = Test-HasProperty -Object $exception -Name "macro"
-            if ($hasExactLine -ne $hasExactMacro) {
-                throw "$exceptionContext の個別例外は line と macro の両方を指定してください: $exceptionPath"
-            }
             if ($hasExactLine) {
-                if (-not $isRegexException -or $allowedCount -ne 1) {
-                    throw "$exceptionContext の個別例外は regex を持ち、allowedCount=1でなければなりません: $exceptionPath"
-                }
                 $exactLine = Get-RequiredNonNegativeInteger -Object $exception -Name "line" -Context $exceptionContext
                 $exactMacro = Get-RequiredString -Object $exception -Name "macro" -Context $exceptionContext
                 if ($exactLine -lt 1) {
@@ -406,9 +441,15 @@ try {
 
                 $identityPresent = $false
                 if ($maskedByPath.ContainsKey($exceptionPath)) {
-                    $exactLines = @(([string]$maskedByPath[$exceptionPath]) -split "`r?`n")
-                    if ($exactLine -le $exactLines.Count -and $exactLines[$exactLine - 1].Contains($exactMacro)) {
-                        $identityPresent = $true
+                    $maskedText = [string]$maskedByPath[$exceptionPath]
+                    if ($isRegexException) {
+                        $identityPresent = Test-RegexIdentityAtLine -Text $maskedText -Regex $exceptionRegex -Line $exactLine -Macro $exactMacro
+                    }
+                    else {
+                        $exactLines = @($maskedText -split "`r?`n")
+                        if ($exactLine -le $exactLines.Count -and $exactLines[$exactLine - 1].Contains($exactMacro)) {
+                            $identityPresent = $true
+                        }
                     }
                 }
                 if (-not $identityPresent) {
@@ -441,12 +482,20 @@ try {
                 }
                 $macroCounts[$candidateMacro] += 1
 
-                $candidateFullPath = Get-SafeRepositoryPath -Root $RepositoryRoot -RelativePath $candidatePath -Context "$context candidateInventory"
+                [void](Get-SafeRepositoryPath -Root $RepositoryRoot -RelativePath $candidatePath -Context "$context candidateInventory")
                 $identityPresent = $false
-                if (Test-Path -LiteralPath $candidateFullPath -PathType Leaf) {
-                    $candidateLines = @([IO.File]::ReadAllLines($candidateFullPath))
-                    if ($candidateLine -le $candidateLines.Count -and $candidateLines[$candidateLine - 1].Contains($candidateMacro)) {
-                        $identityPresent = $true
+                if ($maskedByPath.ContainsKey($candidatePath)) {
+                    $candidateText = [string]$maskedByPath[$candidatePath]
+                    if (Test-HasProperty -Object $candidate -Name "regex") {
+                        $candidatePattern = Get-RequiredString -Object $candidate -Name "regex" -Context "$context candidateInventory"
+                        $candidateRegex = New-CheckedRegex -Pattern $candidatePattern -Context "$context candidateInventory"
+                        $identityPresent = Test-RegexIdentityAtLine -Text $candidateText -Regex $candidateRegex -Line $candidateLine -Macro $candidateMacro
+                    }
+                    else {
+                        $candidateLines = @($candidateText -split "`r?`n")
+                        if ($candidateLine -le $candidateLines.Count -and $candidateLines[$candidateLine - 1].Contains($candidateMacro)) {
+                            $identityPresent = $true
+                        }
                     }
                 }
                 if (-not $identityPresent) {

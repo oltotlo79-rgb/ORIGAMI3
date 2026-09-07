@@ -19,6 +19,11 @@ use ori3_propose::skeleton::TipPos2d;
 use ori3_propose::verify::{VerifiedPlan, verify_search_completion, verify_search_outcome};
 use serde::{Deserialize, Serialize};
 
+#[path = "support/numeric.rs"]
+mod numeric;
+#[path = "support/tolerance.rs"]
+mod tolerance;
+
 struct Sample {
     id: &'static str,
     name: &'static str,
@@ -1475,10 +1480,11 @@ fn zz_write_check_documents() {
         );
         let reread: ori3_model::SavedDocument = serde_json::from_value(value)
             .unwrap_or_else(|error| panic!("{path}: 製品の読み取り機で読めない: {error}"));
-        assert_eq!(
+        numeric::assert_serialized_values_near(
             &reread.document,
             session.document(),
-            "{path}: 読み直したら中身が変わった"
+            tolerance::CP_POS_TOL,
+            &format!("{path}: 読み直した中身"),
         );
         println!(
             "WROTE {name}.ori3 標本={} ids={ids:?} stop={:?} 手数={} 面={} バイト={} length={:.16} width={:.12} position={:.6}",

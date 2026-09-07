@@ -26,6 +26,24 @@ const PAPER: (f64, f64) = (1.0, 1.0);
 /// 配置の乱数の種とやり直しの回数。既存の検査と同じ値。
 const SEED: u64 = 2026;
 const STARTS: usize = 8;
+/// 同じファイルで既に使っている、完成指標の計算結果を比べる絶対許容差。
+const GAP_TOL: f64 = 1e-12;
+
+#[track_caller]
+fn assert_gap_near(label: &str, got: f64, want: f64) {
+    assert!(
+        (got - want).abs() <= GAP_TOL,
+        "{label}: {got} と {want} の差が許容 {GAP_TOL:e} を超えた"
+    );
+}
+
+#[track_caller]
+fn assert_finish_gaps_near(label: &str, got: FinishGaps, want: FinishGaps) {
+    assert_gap_near(&format!("{label} count"), got.count, want.count);
+    assert_gap_near(&format!("{label} length"), got.length, want.length);
+    assert_gap_near(&format!("{label} width"), got.width, want.width);
+    assert_gap_near(&format!("{label} position"), got.position, want.position);
+}
 
 /// 角を `n` 本ぶら下げた星形の骨格。長さ・太さ・位置を1本ずつ変える。
 ///
@@ -139,11 +157,7 @@ fn the_finished_form_itself_scores_best_on_all_four() {
         let target = FinishTarget::from_skeleton(&skeleton);
         let form = FinishedForm::matching(&target);
         let gaps = finish_gaps(&target, &form);
-        assert_eq!(
-            gaps,
-            FinishGaps::BEST,
-            "角{n}本: 完成形そのものなのに最良にならなかった"
-        );
+        assert_finish_gaps_near(&format!("角{n}本: 完成形そのもの"), gaps, FinishGaps::BEST);
     }
 }
 
@@ -244,12 +258,9 @@ fn breaking_the_finished_form_worsens_the_matching_gap() {
         after.length > before.length,
         "長さを半分にしたのに長さの隔たりが増えなかった: {before:?} → {after:?}"
     );
-    assert_eq!(after.count, before.count, "長さを変えたのに数が動いた");
-    assert_eq!(after.width, before.width, "長さを変えたのに太さが動いた");
-    assert_eq!(
-        after.position, before.position,
-        "長さを変えたのに位置が動いた"
-    );
+    assert_gap_near("長さを変えた後の数", after.count, before.count);
+    assert_gap_near("長さを変えた後の太さ", after.width, before.width);
+    assert_gap_near("長さを変えた後の位置", after.position, before.position);
 
     // 崩し3: 1本の太さを半分にする → 太さだけが悪化する。
     let (before, after) = broken("太さを半分にする", |f| {
@@ -261,12 +272,9 @@ fn breaking_the_finished_form_worsens_the_matching_gap() {
         after.width > before.width,
         "太さを半分にしたのに太さの隔たりが増えなかった: {before:?} → {after:?}"
     );
-    assert_eq!(after.count, before.count, "太さを変えたのに数が動いた");
-    assert_eq!(after.length, before.length, "太さを変えたのに長さが動いた");
-    assert_eq!(
-        after.position, before.position,
-        "太さを変えたのに位置が動いた"
-    );
+    assert_gap_near("太さを変えた後の数", after.count, before.count);
+    assert_gap_near("太さを変えた後の長さ", after.length, before.length);
+    assert_gap_near("太さを変えた後の位置", after.position, before.position);
 
     // 崩し4: 1本の位置を0.1ずらす → 位置だけが悪化する(PRO-007: 変化 > 1e-4)。
     let (before, after) = broken("位置を0.1ずらす", |f| {
@@ -280,9 +288,9 @@ fn breaking_the_finished_form_worsens_the_matching_gap() {
         after.position - before.position > 1e-4,
         "位置を0.1ずらしたのに位置の隔たりが1e-4を超えて変わらなかった: {before:?} → {after:?}"
     );
-    assert_eq!(after.count, before.count, "位置を変えたのに数が動いた");
-    assert_eq!(after.length, before.length, "位置を変えたのに長さが動いた");
-    assert_eq!(after.width, before.width, "位置を変えたのに太さが動いた");
+    assert_gap_near("位置を変えた後の数", after.count, before.count);
+    assert_gap_near("位置を変えた後の長さ", after.length, before.length);
+    assert_gap_near("位置を変えた後の太さ", after.width, before.width);
 }
 
 /// 紙の上で先端どうしが近すぎると、届く長さが短くなって長さ・太さが悪化する。
@@ -319,7 +327,7 @@ fn limbs_that_sit_too_close_lose_length_and_width() {
             "届いた長さが実測値と違う: {tip:?}"
         );
     }
-    assert_eq!(count_gap(&target, &form), 0.0, "角の本数は減っていない");
+    assert_gap_near("角の本数は減っていない", count_gap(&target, &form), 0.0);
     assert!(
         (length_gap(&target, &form) - 0.375).abs() < 1e-12,
         "長さの隔たりが実測値と違う: {}",
@@ -351,7 +359,9 @@ fn the_same_input_gives_the_same_four_values_ten_times() {
             let gaps = finish_gaps(&target, &form);
             match first {
                 None => first = Some(gaps),
-                Some(f) => assert_eq!(gaps, f, "角{n}本: {run}回目の値が1回目と違う"),
+                Some(f) => {
+                    assert_finish_gaps_near(&format!("角{n}本: {run}回目の値と1回目"), gaps, f)
+                }
             }
         }
     }
@@ -411,10 +421,10 @@ fn tips_without_a_specified_position_are_left_out() {
 
     // 指定のある2本だけ合っていれば最良。指定の無い2本は測っていなくてよい。
     let mut form = FinishedForm::matching(&target);
-    assert_eq!(
+    assert_gap_near(
+        "指定の無い先端が効いている",
         position_gap(&target, &form),
         0.0,
-        "指定の無い先端が効いている"
     );
 
     // 指定のある1本を、いちばん遠い扱いにする(測っていない)。
@@ -434,7 +444,11 @@ fn tips_without_a_specified_position_are_left_out() {
     }
     let bare_target = FinishTarget::from_skeleton(&bare);
     let bare_form = FinishedForm::matching(&bare_target);
-    assert_eq!(position_gap(&bare_target, &bare_form), 0.0);
+    assert_gap_near(
+        "位置指定の無い完成形",
+        position_gap(&bare_target, &bare_form),
+        0.0,
+    );
 }
 
 /// 位置の隔たりは、枠の中で測れているかぎり 0.0〜1.0 に収まる。

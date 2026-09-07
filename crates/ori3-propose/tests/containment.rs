@@ -387,7 +387,11 @@ fn bird_base_measured_flaps_exactly_saturate_center_containment() {
     };
 
     // 案A: 違反0。しかも6対のうち5対がぴったり(=これ以上大きくできない)。
-    assert_eq!(violation_center(&skeleton, &packing, 1.0, 1.0), 0.0);
+    let violation = violation_center(&skeleton, &packing, 1.0, 1.0);
+    assert!(
+        violation.abs() <= PACK_TOL,
+        "中心包含の違反 {violation:e} が許容 {PACK_TOL:e} を超えた"
+    );
     let mut tight = 0;
     for (ia, &(id_a, a)) in packing.centers.iter().enumerate() {
         for &(id_b, b) in &packing.centers[ia + 1..] {
@@ -427,7 +431,11 @@ fn frog_base_measured_flaps_are_equal_whether_the_circle_overflows_or_not() {
         violation: 0.0,
         circles: Vec::new(),
     };
-    assert_eq!(violation_center(&skeleton, &packing, 1.0, 1.0), 0.0);
+    let violation = violation_center(&skeleton, &packing, 1.0, 1.0);
+    assert!(
+        violation.abs() <= PACK_TOL,
+        "中心包含の違反 {violation:e} が許容 {PACK_TOL:e} を超えた"
+    );
 
     // 隅の4本は円の3/4が紙の外。中心の1本は全部が紙の中(余裕0.1464)。
     let margin_corner = 0.0_f64;

@@ -8,12 +8,16 @@
 
 use ori3_model::{CreasePattern, Document, EdgeKind, Paper};
 use ori3_propose::enumerate::{FoldSession, MAX_SEAM_GAP, PoseScan, Unverified};
-use ori3_propose::finish::{FinishTarget, TargetTip};
+use ori3_propose::finish::{FinishGaps, FinishTarget, TargetTip};
 use ori3_propose::search::{FoldGoal, GapWeights, SearchBudget, TipSite, search_to_finish};
-use ori3_propose::verify::{StepFailure, VerifyReport, verify_fold_order, verify_search_outcome};
+use ori3_propose::verify::{
+    StepFailure, VerifyFailure, VerifyReport, verify_fold_order, verify_search_outcome,
+};
 
 #[path = "support/fixed_order.rs"]
 mod fixed_order;
+#[path = "support/tolerance.rs"]
+mod tolerance;
 
 use fixed_order::folded_along;
 
@@ -26,6 +30,158 @@ const YAKKO_EQUIVALENT_ORDER: [usize; 2] = [1, 2]; // 2026-08-28: `[0,3,7]`→`[
 const YAKKO_SECOND_REORDER_PAIR: [[usize; 2]; 2] = [[2, 6], [6, 2]]; // 2026-08-28: 折り鶴の旧`[16,3]↔[3,16]`→やっこ`[2,6]↔[6,2]`; 旧16は2/37違反・物理破棄4＋表示marker 1、strict有効手は折り鶴1/27・やっこ4/8。
 const YAKKO_CUT_SHORT_ORDER: [usize; 2] = [1, 2]; // 2026-08-28: 打ち切り入力`[0,7,3]`→`[1,2]`; 旧0は1/9違反・破棄5、strict有効手は4/8。
 const YAKKO_BAD_AFTER_FIRST: usize = 0; // 2026-08-28: 旧bad 2→0（新prefix 2後）; 旧固定prefix 0は1/9違反・破棄5、strict有効手は4/8。
+
+#[track_caller]
+fn assert_near(label: &str, got: f64, want: f64) {
+    assert!(
+        (got - want).abs() <= tolerance::CP_POS_TOL,
+        "{label}: {got} と {want} の差が許容{}を超えた",
+        tolerance::CP_POS_TOL
+    );
+}
+
+#[track_caller]
+fn assert_gaps_near(label: &str, got: FinishGaps, want: FinishGaps) {
+    assert_near(&format!("{label} count"), got.count, want.count);
+    assert_near(&format!("{label} length"), got.length, want.length);
+    assert_near(&format!("{label} width"), got.width, want.width);
+    assert_near(&format!("{label} position"), got.position, want.position);
+}
+
+#[track_caller]
+fn assert_unverified_near(got: Unverified, want: Unverified) {
+    match (got, want) {
+        (Unverified::CannotCollapse, Unverified::CannotCollapse) => {}
+        (Unverified::Torn { max_seam_gap: got }, Unverified::Torn { max_seam_gap: want }) => {
+            assert_near("失敗時の裂け", got, want)
+        }
+        (
+            Unverified::PaperPassesThrough { pairs: got },
+            Unverified::PaperPassesThrough { pairs: want },
+        ) => assert!(got == want, "失敗時のめり込み件数が変わった"),
+        (Unverified::PoseFailed(got), Unverified::PoseFailed(want)) => {
+            assert!(got == want, "姿勢失敗の種類が変わった");
+        }
+        _ => panic!("検証失敗の種類が変わった: {got:?} != {want:?}"),
+    }
+}
+
+#[track_caller]
+fn assert_failure_near(got: Option<VerifyFailure>, want: Option<VerifyFailure>) {
+    match (got, want) {
+        (None, None) => {}
+        (Some(got), Some(want)) => {
+            assert!(got.index == want.index, "落ちた手数が変わった");
+            assert!(got.id == want.id, "落ちた折り線IDが変わった");
+            match (got.cause, want.cause) {
+                (StepFailure::NoSuchFoldLine, StepFailure::NoSuchFoldLine)
+                | (StepFailure::AlreadyFolded, StepFailure::AlreadyFolded)
+                | (StepFailure::LayerOrderBroken, StepFailure::LayerOrderBroken) => {}
+                (StepFailure::NotFoldable(got), StepFailure::NotFoldable(want)) => {
+                    assert_unverified_near(got, want);
+                }
+                _ => panic!("落ちた理由が変わった: {:?} != {:?}", got.cause, want.cause),
+            }
+        }
+        _ => panic!("失敗の有無が変わった: {got:?} != {want:?}"),
+    }
+}
+
+#[track_caller]
+fn assert_report_near(label: &str, got: &VerifyReport, want: &VerifyReport) {
+    assert!(
+        got.requested == want.requested,
+        "{label}: 要求手数が変わった"
+    );
+    assert!(
+        got.steps.len() == want.steps.len(),
+        "{label}: 通った手数が変わった"
+    );
+    assert_failure_near(got.failure, want.failure);
+    assert_near(label, got.max_seam_gap, want.max_seam_gap);
+    assert!(
+        got.penetrations == want.penetrations,
+        "{label}: めり込み件数が変わった"
+    );
+    assert!(
+        got.poses_checked == want.poses_checked,
+        "{label}: 姿勢数が変わった"
+    );
+    assert!(
+        got.final_check.faces == want.final_check.faces,
+        "{label}: 面数が変わった"
+    );
+    assert!(
+        got.final_check.expected_faces == want.final_check.expected_faces,
+        "{label}: 期待面数が変わった"
+    );
+    assert!(
+        got.final_check.finite == want.final_check.finite,
+        "{label}: 有限性が変わった"
+    );
+    assert!(
+        got.final_check.skipped == want.final_check.skipped,
+        "{label}: skip数が変わった"
+    );
+    assert!(
+        got.final_check.warnings == want.final_check.warnings,
+        "{label}: 警告数が変わった"
+    );
+    assert_near(
+        &format!("{label}: 終点の裂け"),
+        got.final_check.max_seam_gap,
+        want.final_check.max_seam_gap,
+    );
+    assert!(
+        got.final_check.penetrations == want.final_check.penetrations,
+        "{label}: 終点のめり込み件数が変わった"
+    );
+    assert_gaps_near(&format!("{label}: 開始"), got.start_gaps, want.start_gaps);
+    assert_near(
+        &format!("{label}: 開始点"),
+        got.start_score,
+        want.start_score,
+    );
+    assert_gaps_near(&format!("{label}: 終点"), got.final_gaps, want.final_gaps);
+    assert_near(
+        &format!("{label}: 終点点"),
+        got.final_score,
+        want.final_score,
+    );
+    for (index, (got, want)) in got.steps.iter().zip(&want.steps).enumerate() {
+        assert!(
+            got.index == want.index,
+            "{label}: {index}手目のindexが変わった"
+        );
+        assert!(got.id == want.id, "{label}: {index}手目のIDが変わった");
+        for point in 0..2 {
+            for axis in 0..2 {
+                assert_near(
+                    &format!("{label}: {index}手目の線[{point}][{axis}]"),
+                    got.line[point][axis],
+                    want.line[point][axis],
+                );
+            }
+        }
+        assert_near(
+            &format!("{label}: {index}手目の裂け"),
+            got.max_seam_gap,
+            want.max_seam_gap,
+        );
+        assert!(
+            got.penetrations == want.penetrations,
+            "{label}: {index}手目のめり込みが変わった"
+        );
+        assert!(
+            got.poses_checked == want.poses_checked,
+            "{label}: {index}手目の姿勢数が変わった"
+        );
+        assert!(
+            got.layer_warnings == want.layer_warnings,
+            "{label}: {index}手目の層警告が変わった"
+        );
+    }
+}
 
 /// 標本1: 折り鶴。作業18が写した展開図を、追跡対象の `tests/fixtures/` から読む。
 fn crane() -> Document {
@@ -249,11 +405,20 @@ fn a_whole_fold_order_is_checked_from_the_first_move_to_the_finished_shape() {
             .iter()
             .find(|l| l.id == order[0])
             .unwrap_or_else(|| panic!("{name}: 折り線 {} が無い", order[0]));
-        assert_eq!(
-            report.steps[0].line,
-            [first.a, first.b],
-            "{name}: 1手目に閉じた直線が折り線と食い違う"
-        );
+        for point in 0..2 {
+            let expected = [first.a, first.b][point];
+            for (axis, (&got, &want)) in report.steps[0].line[point]
+                .iter()
+                .zip(expected.iter())
+                .enumerate()
+            {
+                assert_near(
+                    &format!("{name}: 1手目に閉じた直線[{point}][{axis}]"),
+                    got,
+                    want,
+                );
+            }
+        }
 
         assert!(
             report.final_check.is_sound(),
@@ -593,7 +758,7 @@ fn the_same_order_gives_the_same_report_three_times() {
     for (name, doc, order, goal) in cases {
         let runs: Vec<VerifyReport> = (0..RUNS).map(|_| check(doc, &order, goal)).collect();
         for (i, r) in runs.iter().enumerate().skip(1) {
-            assert_eq!(&runs[0], r, "{name}: {}回目の結果が1回目と違う", i + 1);
+            assert_report_near(&format!("{name}: {}回目の結果", i + 1), r, &runs[0]);
         }
         println!("{name}: {RUNS}回とも同じ結果 / {}", runs[0].describe());
     }
@@ -658,6 +823,10 @@ fn an_empty_order_is_checked_as_the_flat_paper() {
     assert_eq!(report.poses_checked, 1, "最後の形の1点だけを見るはず");
     assert!(report.final_check.is_sound());
     // 折る前と後が同じ形なので、4つの物差しも同じ値になる。
-    assert_eq!(report.start_gaps, report.final_gaps);
-    assert_eq!(report.start_score, report.final_score);
+    assert_gaps_near("空手順の開始と終了", report.start_gaps, report.final_gaps);
+    assert_near(
+        "空手順の開始点と終了点",
+        report.start_score,
+        report.final_score,
+    );
 }

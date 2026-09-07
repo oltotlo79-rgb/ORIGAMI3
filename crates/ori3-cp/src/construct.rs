@@ -74,7 +74,7 @@ pub fn divide_points(seg: [[f64; 2]; 2], n: u32) -> Vec<[f64; 2]> {
 /// 刻みが0以下・180°超のときは空を返す。
 #[must_use]
 pub fn direction_lines(p: [f64; 2], step_deg: f64) -> Vec<[[f64; 2]; 2]> {
-    if !(step_deg > 0.0 && step_deg <= 180.0) {
+    if step_deg.is_nan() || step_deg <= 0.0 || step_deg > 180.0 {
         return Vec::new();
     }
     let center = DVec2::from(p);

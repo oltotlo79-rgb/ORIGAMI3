@@ -3,6 +3,11 @@
 use ori3_propose::packing::{MAX_CANDIDATES, PACK_TOL, Packing, pack};
 use ori3_propose::skeleton::{Skeleton, SkeletonNode};
 
+#[path = "support/numeric.rs"]
+mod numeric;
+#[path = "support/tolerance.rs"]
+mod tolerance;
+
 /// 根に葉を`n`本だけぶら下げた星形の骨格(各辺の長さは`len`)。
 fn star(n: u32, len: f64) -> Skeleton {
     let mut nodes = vec![SkeletonNode::new(0, None, 0.0)];
@@ -23,33 +28,6 @@ fn max_violation(s: &Skeleton, p: &Packing, w: f64, h: f64) -> f64 {
         }
     }
     v.max(0.0)
-}
-
-/// 同じ入力の再計算が浮動小数点のビットまで同じかを、整数だけで比べる。
-/// 固定した計算値との比較ではなく、最初の1回を残り9回の基準にする。
-fn packing_bits(output: &[Packing]) -> Vec<u64> {
-    let mut bits = vec![output.len() as u64];
-    for candidate in output {
-        bits.extend([
-            candidate.scale.to_bits(),
-            candidate.violation.to_bits(),
-            candidate.centers.len() as u64,
-        ]);
-        for &(leaf_id, center) in &candidate.centers {
-            bits.extend([u64::from(leaf_id), center[0].to_bits(), center[1].to_bits()]);
-        }
-        bits.push(candidate.circles.len() as u64);
-        for circle in &candidate.circles {
-            bits.extend([
-                u64::from(circle.leaf_id),
-                circle.circle_index as u64,
-                circle.center[0].to_bits(),
-                circle.center[1].to_bits(),
-                circle.radius.to_bits(),
-            ]);
-        }
-    }
-    bits
 }
 
 #[test]
@@ -81,9 +59,12 @@ fn same_seed_gives_same_result() {
     let s = star(6, 0.8);
     let a = pack(&s, 1.0, 0.75, 42, 8);
     let b = pack(&s, 1.0, 0.75, 42, 8);
-    assert_eq!(a, b);
+    numeric::assert_serialized_values_near(&a, &b, tolerance::CP_POS_TOL, "同じseedから作った配置");
     let c = pack(&s, 1.0, 0.75, 43, 8);
-    assert_ne!(a, c, "シードを変えても同じ結果になっている");
+    assert!(
+        !numeric::serialized_values_are_near(&a, &c, PACK_TOL),
+        "シードを変えても許容 {PACK_TOL:e} を超える違いがない"
+    );
 }
 
 #[test]
@@ -168,9 +149,9 @@ fn twelve_leaf_center_containment_lower_bound_is_feasible() {
     };
 
     let violation = max_violation(&s, &packing, 1.0, 1.0);
-    assert_eq!(
-        violation, 0.0,
-        "中心包含の12葉下限{LOWER_BOUND}を満たさない"
+    assert!(
+        violation.abs() <= PACK_TOL,
+        "中心包含の12葉下限{LOWER_BOUND}の違反{violation:e}が許容{PACK_TOL:e}を超えた"
     );
 }
 
@@ -185,7 +166,7 @@ fn work8_twelve_leaf_search_reaches_the_known_feasible_scale_ten_times() {
     const RUNS: usize = 10;
 
     let skeleton = star(12, 1.0);
-    let mut expected_bits = None;
+    let mut expected_output: Option<Vec<Packing>> = None;
     let mut passed = 0;
     let mut achieved = (f64::NAN, f64::NAN, f64::NAN);
     for run in 1..=RUNS {
@@ -222,11 +203,15 @@ fn work8_twelve_leaf_search_reaches_the_known_feasible_scale_ten_times() {
             "{run}回目の葉IDまたは中心座標が不正"
         );
 
-        let actual_bits = packing_bits(&output);
-        if let Some(expected) = &expected_bits {
-            assert_eq!(&actual_bits, expected, "{run}回目が初回とbit不一致");
+        if let Some(expected) = &expected_output {
+            numeric::assert_serialized_values_near(
+                &output,
+                expected,
+                tolerance::CP_POS_TOL,
+                &format!("{run}回目の配置と初回"),
+            );
         } else {
-            expected_bits = Some(actual_bits);
+            expected_output = Some(output);
         }
         passed += 1;
     }

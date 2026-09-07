@@ -779,7 +779,7 @@ fn segment_piercing(p0: DVec3, p1: DVec3, tri: &[DVec3; 3]) -> Option<SegmentTri
         return None; // 三角形の内部でなければ貫通としない
     }
     let t = e2.dot(q) / det;
-    if !(t > TOL && t < 1.0 - TOL) {
+    if t.is_nan() || t <= TOL || t >= 1.0 - TOL {
         return None;
     }
 

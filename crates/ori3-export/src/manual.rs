@@ -1007,7 +1007,7 @@ fn rasterize_diagram(diagram: &Diagram) -> Result<RasterDiagram, String> {
     let size = tree.size();
     let width = size.width();
     let height = size.height();
-    if !(width > 0.0 && height > 0.0) {
+    if width.is_nan() || height.is_nan() || width <= 0.0 || height <= 0.0 {
         return Err(format!("図解「{}」の大きさが不正です", diagram.id));
     }
     let scale = DIAGRAM_LONG_SIDE_PX as f32 / width.max(height);

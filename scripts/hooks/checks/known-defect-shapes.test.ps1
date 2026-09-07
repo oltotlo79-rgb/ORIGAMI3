@@ -48,6 +48,13 @@ function Write-TestSource {
     [IO.File]::WriteAllText($sourcePath, $Content, [Text.UTF8Encoding]::new($false))
 }
 
+function Write-TestDefinition {
+    param([Parameter(Mandatory = $true)]$Definition)
+
+    $definitionJson = $Definition | ConvertTo-Json -Depth 10
+    [IO.File]::WriteAllText($definitionPath, $definitionJson, [Text.UTF8Encoding]::new($false))
+}
+
 function Invoke-IsolatedCheck {
     param(
         [Parameter(Mandatory = $true)][string]$PowerShellPath,
@@ -143,8 +150,7 @@ try {
             }
         )
     }
-    $definitionJson = $definition | ConvertTo-Json -Depth 10
-    [IO.File]::WriteAllText($definitionPath, $definitionJson, [Text.UTF8Encoding]::new($false))
+    Write-TestDefinition -Definition $definition
 
     $baseline = @'
 pub fn check(value: f64, integer: usize) {
@@ -157,14 +163,14 @@ pub fn check(value: f64, integer: usize) {
 }
 '@
 
-    Write-Output "[1/5] registered count, comment/string masking, and one exception pass"
+    Write-Output "[1/10] registered count, comment/string masking, and one exception pass"
     Write-TestSource -Content $baseline
     $result = Invoke-IsolatedCheck -PowerShellPath $powerShellCommand.Source
     Assert-Equal $result.ExitCode 0 "unchanged registered count must pass" $result.Output
     Assert-Contains $result.Output "1 件（登録 1、raw=2、許可例外=1）" "masking and exception counts must be reported"
     Assert-Contains $result.Output "台帳移動 0 件" "the classified false-positive inventory must match its registered line"
 
-    Write-Output "[2/5] adding only comments and strings does not change the count"
+    Write-Output "[2/10] adding only comments and strings does not change the count"
     Write-TestSource -Content ($baseline + @'
 // if !(another_comment < 7.0) {}
 const TEXT: &str = r##"if !(another_raw_string < 8.0) {}"##;
@@ -174,7 +180,7 @@ const TEXT: &str = r##"if !(another_raw_string < 8.0) {}"##;
     Assert-Equal $result.ExitCode 0 "comment and string shapes must not be counted" $result.Output
     Assert-Contains $result.Output "raw=2" "masked additions must leave raw count unchanged"
 
-    Write-Output "[3/5] increasing a known defect shape fails"
+    Write-Output "[3/10] increasing a known defect shape fails"
     Write-TestSource -Content ($baseline + "`nfn added(other: f64) { if !(other < 3.0) {} }`n")
     $result = Invoke-IsolatedCheck -PowerShellPath $powerShellCommand.Source
     Assert-Equal $result.ExitCode 1 "an increased shape count must fail" $result.Output
@@ -187,7 +193,7 @@ pub fn check(integer: usize) {
     let _normal = "if !(string_value < 4.0) {}";
 }
 '@
-    Write-Output "[4/5] decreasing a known defect shape reports the reduction and passes by default"
+    Write-Output "[4/10] decreasing a known defect shape reports the reduction and passes by default"
     Write-TestSource -Content $decreased
     $result = Invoke-IsolatedCheck -PowerShellPath $powerShellCommand.Source
     Assert-Equal $result.ExitCode 0 "a decrease must pass by default" $result.Output
@@ -196,12 +202,78 @@ pub fn check(integer: usize) {
     Assert-Contains $result.Output "known-defect-shapes.json" "decrease output must prompt a data update"
     Assert-Contains $result.Output "誤検知例外台帳が移動または消失しました" "a moved classified false-positive entry must be visible"
 
-    Write-Output "[5/5] -FailOnDecrease makes the same reduction fail"
+    Write-Output "[5/10] -FailOnDecrease makes the same reduction fail"
     $result = Invoke-IsolatedCheck -PowerShellPath $powerShellCommand.Source -StrictDecrease
     Assert-Equal $result.ExitCode 1 "-FailOnDecrease must reject a reduction until data is updated" $result.Output
     Assert-Contains $result.Output "-FailOnDecrease" "strict decrease output must name the option"
 
-    Write-Output "known-defect-shapes self-test passed: 5 cases, $script:AssertionCount assertions"
+    $candidateDefinition = [ordered]@{
+        schemaVersion = 1
+        patterns = @(
+            [ordered]@{
+                id = "isolated-strict-equality"
+                reason = "隔離試験用の厳密比較"
+                roots = @("src")
+                filePattern = "\.rs$"
+                regex = "\bassert_(?:eq|ne)!\s*\("
+                registeredCount = 1
+                measuredRawCount = 1
+                candidateInventory = @(
+                    [ordered]@{
+                        path = "src/lib.rs"
+                        line = 2
+                        macro = "assert_eq!"
+                        regex = "assert_eq!\s*\(\s*computed\s*,\s*1\.0\s*\)"
+                        shape = "computedと1.0"
+                    }
+                )
+                registeredBreakdown = [ordered]@{ "assert_eq!" = 1 }
+                exceptions = @()
+            }
+        )
+    }
+    $candidateBaseline = @'
+pub fn check(computed: f64) {
+    assert_eq!(computed, 1.0);
+}
+'@
+
+    Write-Output "[6/10] regex fingerprint accepts the unchanged candidate"
+    Write-TestDefinition -Definition $candidateDefinition
+    Write-TestSource -Content $candidateBaseline
+    $result = Invoke-IsolatedCheck -PowerShellPath $powerShellCommand.Source -StrictDecrease
+    Assert-Equal $result.ExitCode 0 "an unchanged regex fingerprint must pass" $result.Output
+    Assert-Contains $result.Output "台帳移動 0 件" "the unchanged fingerprint must not drift"
+
+    Write-Output "[7/10] same-count replacement on the registered line is rejected"
+    Write-TestSource -Content ($candidateBaseline.Replace("computed, 1.0", "replacement, 2.0").Replace("computed: f64", "replacement: f64"))
+    $result = Invoke-IsolatedCheck -PowerShellPath $powerShellCommand.Source -StrictDecrease
+    Assert-Equal $result.ExitCode 1 "a different strict comparison on the same line must be rejected" $result.Output
+    Assert-Contains $result.Output "候補台帳が移動または消失しました" "same-count replacement must report inventory drift"
+
+    Write-Output "[8/10] regex fingerprint detects a line move"
+    Write-TestSource -Content ($candidateBaseline.Replace("    assert_eq!", "`n    assert_eq!"))
+    $result = Invoke-IsolatedCheck -PowerShellPath $powerShellCommand.Source -StrictDecrease
+    Assert-Equal $result.ExitCode 1 "a fingerprint moved away from its registered line must be rejected" $result.Output
+    Assert-Contains $result.Output "候補台帳が移動または消失しました" "line drift must be visible"
+
+    Write-Output "[9/10] candidate without regex keeps the legacy macro check"
+    [void]$candidateDefinition.patterns[0].candidateInventory[0].Remove("regex")
+    Write-TestDefinition -Definition $candidateDefinition
+    Write-TestSource -Content $candidateBaseline
+    $result = Invoke-IsolatedCheck -PowerShellPath $powerShellCommand.Source -StrictDecrease
+    Assert-Equal $result.ExitCode 0 "a legacy candidate without regex must still pass" $result.Output
+    Assert-Contains $result.Output "台帳移動 0 件" "legacy macro identity must remain compatible"
+
+    Write-Output "[10/10] exception regex rejects a different expression on the same macro line"
+    Write-TestDefinition -Definition $definition
+    Write-TestSource -Content ($baseline.Replace("integer < 2", "integer > 2"))
+    $result = Invoke-IsolatedCheck -PowerShellPath $powerShellCommand.Source -StrictDecrease
+    Assert-Equal $result.ExitCode 1 "an exception fingerprint replacement must be rejected" $result.Output
+    Assert-Contains $result.Output "誤検知例外台帳が移動または消失しました" "exception replacement must report inventory drift"
+    Assert-Contains $result.Output "増加しました" "the replaced exception must not consume the new expression"
+
+    Write-Output "known-defect-shapes self-test passed: 10 cases, $script:AssertionCount assertions"
 }
 finally {
     Remove-TestSandbox

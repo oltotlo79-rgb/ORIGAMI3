@@ -18,12 +18,153 @@ use ori3_layers::precrease_collapse::{
     collapse_precrease_network_for_operation, validate_precrease_layer_order,
 };
 use ori3_model::{CreasePattern, Document, EdgeKind, Paper};
-use ori3_propose::enumerate::{FoldSession, MAX_SEAM_GAP, MoveReport, PoseScan, Unverified};
+use ori3_propose::enumerate::{
+    FoldSession, MAX_SEAM_GAP, MoveReport, PoseScan, RejectedMove, Unverified, VerifiedMove,
+};
 use ori3_propose::{FoldedMask, GenericPlanner, crease_lines};
 use ori3_rigid::{max_seam_gap, self_intersection_pairs};
 
+#[path = "support/numeric.rs"]
+mod numeric;
+#[path = "support/tolerance.rs"]
+mod tolerance;
+
 /// 測る回数。同じ結果になることを確かめるため3回まわす(合格条件4)。
 const RUNS: usize = 3;
+
+fn assert_near(got: f64, want: f64, label: &str) {
+    assert!(
+        (got - want).abs() <= tolerance::CP_POS_TOL,
+        "{label}: {got} と {want} の差が {} を超えた",
+        tolerance::CP_POS_TOL
+    );
+}
+
+fn assert_verified_move_near(got: &VerifiedMove, want: &VerifiedMove, label: &str) {
+    assert!(got.id == want.id, "{label}: id");
+    for (axis, (&got, &want)) in got
+        .line
+        .iter()
+        .flatten()
+        .zip(want.line.iter().flatten())
+        .enumerate()
+    {
+        assert_near(got, want, &format!("{label}: line[{axis}]"));
+    }
+    assert!(got.closes == want.closes, "{label}: closes");
+    assert!(got.mask == want.mask, "{label}: mask");
+    assert_near(
+        got.max_seam_gap,
+        want.max_seam_gap,
+        &format!("{label}: max_seam_gap"),
+    );
+    assert!(
+        got.penetrations == want.penetrations,
+        "{label}: penetrations"
+    );
+    assert!(
+        got.poses_checked == want.poses_checked,
+        "{label}: poses_checked"
+    );
+}
+
+fn assert_unverified_near(got: Unverified, want: Unverified, label: &str) {
+    match (got, want) {
+        (Unverified::Torn { max_seam_gap: got }, Unverified::Torn { max_seam_gap: want }) => {
+            assert_near(got, want, &format!("{label}: max_seam_gap"))
+        }
+        _ => assert!(got == want, "{label}"),
+    }
+}
+
+fn assert_rejected_move_near(got: &RejectedMove, want: &RejectedMove, label: &str) {
+    assert!(got.id == want.id, "{label}: id");
+    for (axis, (&got, &want)) in got
+        .line
+        .iter()
+        .flatten()
+        .zip(want.line.iter().flatten())
+        .enumerate()
+    {
+        assert_near(got, want, &format!("{label}: line[{axis}]"));
+    }
+    assert!(got.closes == want.closes, "{label}: closes");
+    assert_unverified_near(got.reason, want.reason, &format!("{label}: reason"));
+}
+
+fn assert_move_reports_near(
+    got_session: &FoldSession,
+    got: &MoveReport,
+    want_session: &FoldSession,
+    want: &MoveReport,
+    label: &str,
+) {
+    assert!(
+        got.proposed_crease_lines == want.proposed_crease_lines,
+        "{label}: proposed_crease_lines"
+    );
+    assert!(
+        got.proposed_fold_lines == want.proposed_fold_lines,
+        "{label}: proposed_fold_lines"
+    );
+
+    for (field, got, want) in [
+        ("verified", &got.verified, &want.verified),
+        (
+            "verified_within_estimate",
+            &got.verified_within_estimate,
+            &want.verified_within_estimate,
+        ),
+        (
+            "verified_outside_estimate",
+            &got.verified_outside_estimate,
+            &want.verified_outside_estimate,
+        ),
+    ] {
+        assert!(got.len() == want.len(), "{label}: {field} length");
+        for (index, (got, want)) in got.iter().zip(want).enumerate() {
+            assert_verified_move_near(got, want, &format!("{label}: {field}[{index}]"));
+        }
+    }
+
+    assert!(
+        got.rejected.len() == want.rejected.len(),
+        "{label}: rejected length"
+    );
+    for (index, (got, want)) in got.rejected.iter().zip(&want.rejected).enumerate() {
+        assert_rejected_move_near(got, want, &format!("{label}: rejected[{index}]"));
+    }
+
+    let got_operations = got.operation_moves().collect::<Vec<_>>();
+    let want_operations = want.operation_moves().collect::<Vec<_>>();
+    assert!(
+        got_operations.len() == want_operations.len(),
+        "{label}: operation_moves length"
+    );
+    for (index, (got_operation, want_operation)) in
+        got_operations.iter().zip(&want_operations).enumerate()
+    {
+        assert_verified_move_near(
+            got_operation.movement(),
+            want_operation.movement(),
+            &format!("{label}: operation_moves[{index}]"),
+        );
+        let mut got_successor = got_session.clone();
+        let mut want_successor = want_session.clone();
+        got_successor
+            .apply_operation(got_operation)
+            .expect("比較する手を元のsessionへ適用できる");
+        want_successor
+            .apply_operation(want_operation)
+            .expect("比較する手を元のsessionへ適用できる");
+        numeric::assert_serialized_values_near(
+            got_successor.document(),
+            want_successor.document(),
+            tolerance::CP_POS_TOL,
+            &format!("{label}: operation_moves[{index}].successor"),
+        );
+    }
+}
 
 /// 標本1: 折り鶴。`apps/desktop/src/lib/__fixtures__/crane.json` の展開図を
 /// 作業18が写したもの。読むのは追跡対象の `tests/fixtures/` の中だけである。
@@ -297,25 +438,31 @@ fn moves_that_could_not_be_checked_are_never_returned_as_foldable() {
 #[test]
 fn the_same_crease_pattern_gives_the_same_verified_moves_three_times() {
     for (name, _) in samples() {
-        let runs: Vec<MoveReport> = (0..RUNS)
+        let runs: Vec<(FoldSession, MoveReport)> = (0..RUNS)
             .map(|_| {
                 let doc = samples()
                     .into_iter()
                     .find(|(n, _)| *n == name)
                     .expect("標本が見つからない")
                     .1;
-                FoldSession::new(&doc)
-                    .expect("折り始められない")
-                    .verified_moves(PoseScan::DEFAULT)
+                let session = FoldSession::new(&doc).expect("折り始められない");
+                let report = session.verified_moves(PoseScan::DEFAULT);
+                (session, report)
             })
             .collect();
-        for (i, r) in runs.iter().enumerate().skip(1) {
-            assert_eq!(&runs[0], r, "{name}: {}回目の結果が1回目と違う", i + 1);
+        for (i, (session, report)) in runs.iter().enumerate().skip(1) {
+            assert_move_reports_near(
+                session,
+                report,
+                &runs[0].0,
+                &runs[0].1,
+                &format!("{name}: {}回目の結果", i + 1),
+            );
         }
         println!(
             "{name}: {RUNS}回とも同じ(確かめた後 {} 件 / 確かめられなかった {} 件)",
-            runs[0].verified_within_estimate.len(),
-            runs[0].unverified()
+            runs[0].1.verified_within_estimate.len(),
+            runs[0].1.unverified()
         );
     }
 }

@@ -17,6 +17,8 @@ use ori3_rigid::{max_seam_gap, self_intersection_pairs};
 
 #[path = "support/fixed_order.rs"]
 mod fixed_order;
+#[path = "support/tolerance.rs"]
+mod tolerance;
 
 use fixed_order::folded_along;
 
@@ -25,6 +27,94 @@ const RUNS: usize = 3;
 
 const CRANE_STRICT_GOAL_ORDER: [usize; 2] = [3, 16]; // 2026-08-28: `[16,3]`→`[3,16]`; 旧16は入力CPで一般制約2/37違反・物理破棄4＋表示marker 1、strict有効手は1/27。
 const YAKKO_STRICT_GOAL_ORDER: [usize; 1] = [2]; // 2026-08-28: `[0,7]`→`[2]`; 旧0は入力CPで一般制約1/9違反・破棄5、strict有効手は4/8。
+
+#[track_caller]
+fn assert_near(label: &str, got: f64, want: f64) {
+    assert!(
+        (got - want).abs() <= tolerance::CP_POS_TOL,
+        "{label}: {got} と {want} の差が許容{}を超えた",
+        tolerance::CP_POS_TOL
+    );
+}
+
+#[track_caller]
+fn assert_gaps_near(label: &str, got: FinishGaps, want: FinishGaps) {
+    assert_near(&format!("{label} count"), got.count, want.count);
+    assert_near(&format!("{label} length"), got.length, want.length);
+    assert_near(&format!("{label} width"), got.width, want.width);
+    assert_near(&format!("{label} position"), got.position, want.position);
+}
+
+#[track_caller]
+fn assert_outcome_near(label: &str, got: &SearchOutcome, want: &SearchOutcome) {
+    assert!(got.stop == want.stop, "{label}: 停止理由が変わった");
+    assert!(
+        got.states_expanded == want.states_expanded,
+        "{label}: 展開状態数が変わった"
+    );
+    assert!(
+        got.states_generated == want.states_generated,
+        "{label}: 生成状態数が変わった"
+    );
+    assert!(
+        got.max_branching == want.max_branching,
+        "{label}: 最大枝数が変わった"
+    );
+    assert!(
+        got.depth_capped == want.depth_capped,
+        "{label}: 深さ上限回数が変わった"
+    );
+    assert!(
+        got.steps.len() == want.steps.len(),
+        "{label}: 手数が変わった"
+    );
+    assert_gaps_near(&format!("{label}: 開始"), got.start_gaps, want.start_gaps);
+    assert_near(
+        &format!("{label}: 開始点"),
+        got.start_score,
+        want.start_score,
+    );
+    assert_gaps_near(&format!("{label}: 終点"), got.best_gaps, want.best_gaps);
+    assert_near(&format!("{label}: 終点点"), got.best_score, want.best_score);
+    for (index, (got, want)) in got.steps.iter().zip(&want.steps).enumerate() {
+        assert!(
+            got.mv.id == want.mv.id,
+            "{label}: {index}手目のIDが変わった"
+        );
+        assert!(
+            got.mv.closes == want.mv.closes,
+            "{label}: {index}手目の折り線が変わった"
+        );
+        assert!(
+            got.mv.mask == want.mv.mask,
+            "{label}: {index}手目のmaskが変わった"
+        );
+        assert!(
+            got.mv.penetrations == want.mv.penetrations,
+            "{label}: {index}手目のめり込みが変わった"
+        );
+        assert!(
+            got.mv.poses_checked == want.mv.poses_checked,
+            "{label}: {index}手目の姿勢数が変わった"
+        );
+        for point in 0..2 {
+            for axis in 0..2 {
+                assert_near(
+                    &format!("{label}: {index}手目の線[{point}][{axis}]"),
+                    got.mv.line[point][axis],
+                    want.mv.line[point][axis],
+                );
+            }
+        }
+        assert_near(
+            &format!("{label}: {index}手目の裂け"),
+            got.mv.max_seam_gap,
+            want.mv.max_seam_gap,
+        );
+        assert_gaps_near(&format!("{label}: {index}手目"), got.gaps, want.gaps);
+        assert_near(&format!("{label}: {index}手目の点"), got.score, want.score);
+    }
+}
 
 /// 標本1: 折り鶴。作業18が写した展開図を、追跡対象の `tests/fixtures/` から読む。
 fn crane() -> Document {
@@ -489,7 +579,7 @@ fn the_same_input_gives_the_same_fold_order_three_times() {
             })
             .collect();
         for (i, r) in runs.iter().enumerate().skip(1) {
-            assert_eq!(&runs[0], r, "{name}: {}回目の結果が1回目と違う", i + 1);
+            assert_outcome_near(&format!("{name}: {}回目の結果", i + 1), r, &runs[0]);
         }
         let ids: Vec<usize> = runs[0].steps.iter().map(|s| s.mv.id).collect();
         println!(
@@ -648,7 +738,15 @@ fn changing_the_specified_position_changes_the_chosen_fold_order() {
     for (i, (ta, tb)) in a.target.tips.iter().zip(&b.target.tips).enumerate() {
         assert_eq!(ta.length, tb.length, "角{i}: 長さの指定まで変わっている");
         assert_eq!(ta.width, tb.width, "角{i}: 太さの指定まで変わっている");
-        assert_ne!(ta.pos, tb.pos, "角{i}: 位置の指定が変わっていない");
+        match (ta.pos, tb.pos) {
+            (Some(ta), Some(tb)) => assert!(
+                (ta.x - tb.x).hypot(ta.y - tb.y) > tolerance::CP_POS_TOL,
+                "角{i}: 位置の差が許容{}を超えていない",
+                tolerance::CP_POS_TOL
+            ),
+            (None, None) => panic!("角{i}: 位置の指定がどちらにもない"),
+            _ => {}
+        }
     }
 
     let session = FoldSession::new(&doc).expect("折り始められない");

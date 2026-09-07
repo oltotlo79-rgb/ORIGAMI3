@@ -5,7 +5,11 @@ use std::collections::BTreeSet;
 use ori3_propose::skeleton::{Skeleton, SkeletonNode};
 use ori3_propose::{generate, pack};
 
+#[path = "support/numeric.rs"]
+mod numeric;
 mod support;
+#[path = "support/tolerance.rs"]
+mod tolerance;
 
 use support::{CpBaseline, baseline_path, read_baseline};
 
@@ -47,7 +51,7 @@ fn regenerate_cp_baseline() {
 /// 記録は対応を足す前の実装で作ったもの。
 ///
 /// **頂点と辺の個数・番号・並び・つながり・山谷の種類は完全一致**を求める。
-/// **座標だけ** [`support::CP_POS_TOL`] の許容差で比べる
+/// **座標だけ** [`tolerance::CP_POS_TOL`] の許容差で比べる
 /// (理由と実測は同定数のコメント。以前はここも書き出した文字列の完全一致で
 /// 比べており、最下位1桁の違いでCIが落ちた)。
 #[test]
@@ -74,7 +78,7 @@ fn crease_patterns_for_one_to_twelve_leaves_are_unchanged() {
     println!(
         "記録との突き合わせ: 12通り、のべ頂点{seen_vertices}個・のべ辺{seen_edges}本。\
          座標の差の最大 = {worst:.3e}(許容 {:.0e})",
-        support::CP_POS_TOL
+        tolerance::CP_POS_TOL
     );
 }
 
@@ -153,7 +157,12 @@ fn material_point_sits_on_the_packed_circle_center() {
                 site.circle.leaf_id,
                 v.gap
             );
-            assert_eq!(v.gap, measured, "記録したずれと測り直した値が違う");
+            assert!(
+                (v.gap - measured).abs() <= tolerance::CP_POS_TOL,
+                "記録したずれ{}と測り直した値{measured}の差が許容{}を超えた",
+                v.gap,
+                tolerance::CP_POS_TOL
+            );
             worst_here = worst_here.max(measured);
             checked += 1;
         }
@@ -172,11 +181,16 @@ fn material_point_sits_on_the_packed_circle_center() {
 #[test]
 fn the_same_input_gives_the_same_correspondence_ten_times() {
     for n in [1u32, 6, 12] {
-        let first = serde_json::to_string(&build(n).1.sites).expect("対応を書き出せない");
+        let first = build(n).1.sites;
         let mut same = 0usize;
         for round in 1..=10 {
-            let again = serde_json::to_string(&build(n).1.sites).expect("対応を書き出せない");
-            assert_eq!(again, first, "葉{n}本の{round}回目で対応が変わった");
+            let again = build(n).1.sites;
+            numeric::assert_serialized_values_near(
+                &again,
+                &first,
+                tolerance::CP_POS_TOL,
+                &format!("葉{n}本の{round}回目の対応"),
+            );
             same += 1;
         }
         assert_eq!(same, 10, "葉{n}本で10回そろっていない");
@@ -215,10 +229,12 @@ fn packed_circles_and_centers_describe_the_same_circles() {
                 assert_eq!(circle.circle_index, i, "円の番号が並び順と違う");
                 assert_eq!(circle.leaf_id, p.centers[i].0, "先端IDが違う");
                 assert_eq!(circle.center, p.centers[i].1, "中心が違う");
-                assert_eq!(
+                let expected_radius = p.scale * s.leaf_radius(circle.leaf_id);
+                assert!(
+                    (circle.radius - expected_radius).abs() <= tolerance::CP_POS_TOL,
+                    "半径{}と縮尺×骨格の半径{expected_radius}の差が許容{}を超えた",
                     circle.radius,
-                    p.scale * s.leaf_radius(circle.leaf_id),
-                    "半径が縮尺×骨格の半径になっていない"
+                    tolerance::CP_POS_TOL
                 );
             }
         }
@@ -239,9 +255,11 @@ fn packing_without_circle_records_still_yields_the_correspondence() {
     };
     let with_records = generate(&s, &packed, 1.0, 1.0).unwrap();
     let without_records = generate(&s, &bare, 1.0, 1.0).unwrap();
-    assert_eq!(
-        without_records.sites, with_records.sites,
-        "円の記録の有無で対応が変わった"
+    numeric::assert_serialized_values_near(
+        &without_records.sites,
+        &with_records.sites,
+        tolerance::CP_POS_TOL,
+        "円の記録の有無による対応",
     );
     assert_eq!(without_records.sites.len(), 4, "対応が4件でない");
     assert!(

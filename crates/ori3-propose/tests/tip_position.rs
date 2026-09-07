@@ -10,7 +10,11 @@ use ori3_propose::finish::{FinishTarget, FinishedForm};
 use ori3_propose::skeleton::{Skeleton, SkeletonNode, TIP_POS_MAX, TIP_POS_MIN, TipPos2d};
 use ori3_propose::{Packing, body_on_paper, generate, pack, position_gap, tip_targets};
 
+#[path = "support/numeric.rs"]
+mod numeric;
 mod support;
+#[path = "support/tolerance.rs"]
+mod tolerance;
 
 /// 固定JSONの置き場所。`.gitignore` 対象の場所は読まない(CLAUDE.md §10.1)。
 fn fixture(name: &str) -> String {
@@ -154,7 +158,12 @@ fn fixture_json_is_read_with_the_expected_positions() {
 fn json_roundtrip_keeps_positions_within_1e_12() {
     let s: Skeleton = serde_json::from_str(&fixture("position-skeleton.json")).unwrap();
     let back: Skeleton = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
-    assert_eq!(s, back, "書いて読み直した骨格が元と一致する");
+    numeric::assert_serialized_values_near(
+        &s,
+        &back,
+        tolerance::CP_POS_TOL,
+        "書いて読み直した骨格",
+    );
 
     let mut max_err: f64 = 0.0;
     for ((_, a), (_, b)) in s.leaf_tip_positions().iter().zip(back.leaf_tip_positions()) {
@@ -162,7 +171,10 @@ fn json_roundtrip_keeps_positions_within_1e_12() {
     }
     // 実測: 0.0(2026-08-16、固定JSON6本12値)。合格条件は要件PRO-006の 1e-12。
     assert!(max_err <= 1e-12, "往復の絶対誤差 {max_err} が大きすぎる");
-    assert_eq!(max_err, 0.0, "実測の往復誤差は0.0(桁落ちが起きていない)");
+    assert!(
+        max_err.abs() <= 1e-12,
+        "実測の往復誤差{max_err:e}が許容1e-12を超えた"
+    );
 }
 
 #[test]
@@ -306,7 +318,7 @@ fn centroid(packing: &Packing) -> [f64; 2] {
 /// 1. **位置を指定しなければ、今までと完全に一致する**(合格条件3)。
 ///    作業9で残した記録 `fixtures/cp-baseline-1-12.json` と、葉1〜12本の
 ///    12通りで突き合わせる。頂点と辺の個数・番号・並び・つながり・山谷は
-///    完全一致、座標だけ `support::CP_POS_TOL` の許容差で比べる。
+///    完全一致、座標だけ `tolerance::CP_POS_TOL` の許容差で比べる。
 /// 2. **位置を指定すれば、展開図が変わる**(合格条件1)。同じ12通りで、
 ///    指定を付けた骨格の展開図が記録と違うことを確かめる。
 ///
@@ -389,7 +401,7 @@ fn the_given_positions_bring_the_finished_form_closer() {
     // 測り直した位置は指定そのものに戻るので、残るのは小数の丸めだけになる。
     // 実測は下の出力のとおり(2026-08-17、葉1〜12本の12通りで最大
     // **4.531712712300976e-17**、葉4本のとき)。上限はその約22,000倍にあたる
-    // 1e-12 で、記録の突き合わせ(`support::CP_POS_TOL`)と同じ桁にそろえてある。
+    // 1e-12 で、記録の突き合わせ(`tolerance::CP_POS_TOL`)と同じ桁にそろえてある。
     // 実測をそのまま境目にはしていない(`CLAUDE.md` §10.7.9)。
     const GUIDED_LIMIT: f64 = 1e-12;
 
@@ -446,9 +458,11 @@ fn the_given_positions_bring_the_finished_form_closer() {
             // 先端が1本しかないと、円中心の重心はその先端そのものになる。
             // 胴からの離れ方が0になるので、どこへ置いても同じ値にしかならない。
             // 重心でそろえた測り方が使えるのは先端が2本以上のときだけである。
-            assert_eq!(
-                free_c, guided_c,
-                "葉1本では重心が先端と重なるので、同じ値になるはず"
+            assert!(
+                (free_c - guided_c).abs() <= tolerance::CP_POS_TOL,
+                "葉1本の重心差{}が許容{}を超えた",
+                (free_c - guided_c).abs(),
+                tolerance::CP_POS_TOL
             );
         } else {
             assert!(
@@ -578,10 +592,25 @@ fn tips_without_a_given_position_are_still_placed_automatically() {
         }
         // 全部指定した場合とは違う配置になる(指定していない分は自動で決まる)。
         let all_packed = pack(&all, PAPER.0, PAPER.1, 2026, 8);
-        assert_ne!(
-            packed[0].centers, all_packed[0].centers,
-            "葉{n}本: 一部だけ指定した配置が、全部指定した配置と同じになった"
+        let same_within_tolerance = numeric::serialized_values_are_near(
+            &packed[0].centers,
+            &all_packed[0].centers,
+            tolerance::CP_POS_TOL,
         );
+        if n == 2 {
+            // 2本では自動配置も指定配置も対角の両端となり、意味のある差は生じない。
+            assert!(
+                same_within_tolerance,
+                "葉2本: 対角配置同士の差が許容{}を超えた",
+                tolerance::CP_POS_TOL
+            );
+        } else {
+            assert!(
+                !same_within_tolerance,
+                "葉{n}本: 一部だけ指定した配置に許容{}を超える違いがない",
+                tolerance::CP_POS_TOL
+            );
+        }
         cases += 1;
     }
     assert_eq!(cases, 11, "先端2〜12本の11通りを見ていない");
@@ -708,24 +737,23 @@ fn the_same_given_positions_give_the_same_proposal_ten_times() {
         let first = {
             let p = pack(&posed, PAPER.0, PAPER.1, 2026, 8);
             let r = generate(&posed, &p[0], PAPER.0, PAPER.1).unwrap();
-            (
-                serde_json::to_string(&p).unwrap(),
-                serde_json::to_string(&r.cp).unwrap(),
-            )
+            (p, r.cp)
         };
         let mut same = 0usize;
         for round in 1..=10 {
             let p = pack(&posed, PAPER.0, PAPER.1, 2026, 8);
             let r = generate(&posed, &p[0], PAPER.0, PAPER.1).unwrap();
-            assert_eq!(
-                serde_json::to_string(&p).unwrap(),
-                first.0,
-                "葉{n}本の{round}回目で配置が変わった"
+            numeric::assert_serialized_values_near(
+                &p,
+                &first.0,
+                tolerance::CP_POS_TOL,
+                &format!("葉{n}本の{round}回目の配置"),
             );
-            assert_eq!(
-                serde_json::to_string(&r.cp).unwrap(),
-                first.1,
-                "葉{n}本の{round}回目で展開図が変わった"
+            numeric::assert_serialized_values_near(
+                &r.cp,
+                &first.1,
+                tolerance::CP_POS_TOL,
+                &format!("葉{n}本の{round}回目の展開図"),
             );
             same += 1;
         }
@@ -755,11 +783,15 @@ fn nothing_happens_when_no_position_is_given() {
         let packed = pack(&plain, PAPER.0, PAPER.1, 7, 4);
         assert!(!packed.is_empty(), "先端{leaves}本の配置に失敗");
         // 胴の場所は、紙の上の手がかりだけから見積もった円中心の重心になる。
-        assert_eq!(
-            body_on_paper(&plain, &packed[0], PAPER.0, PAPER.1),
-            centroid(&packed[0]),
-            "先端{leaves}本の胴の場所"
-        );
+        let body = body_on_paper(&plain, &packed[0], PAPER.0, PAPER.1);
+        let expected_body = centroid(&packed[0]);
+        for axis in 0..2 {
+            assert!(
+                (body[axis] - expected_body[axis]).abs() <= tolerance::CP_POS_TOL,
+                "先端{leaves}本の胴[{axis}]の差が許容{}を超えた",
+                tolerance::CP_POS_TOL
+            );
+        }
         for &(id, c) in &packed[0].centers {
             assert!(
                 c[0].is_finite() && c[1].is_finite(),

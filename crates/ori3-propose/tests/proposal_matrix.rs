@@ -10,17 +10,22 @@ use std::thread::{self, JoinHandle};
 
 use ori3_model::{CreasePattern, Document, FoldStep, Paper};
 use ori3_propose::{
-    body_on_paper, generate, pack, search_to_completion_with_control, verify_search_completion,
     CompletionTolerance, FinishTarget, FoldGoal, FoldSession, GapWeights, LeafSite, Packing,
     PoseScan, ProposalResult, SearchBudget, SearchControl, SearchStop, SearchWatchdog, Skeleton,
-    SkeletonNode, TipSite, VerifiedPlan,
+    SkeletonNode, TipSite, VerifiedPlan, body_on_paper, generate, pack,
+    search_to_completion_with_control, verify_search_completion,
 };
 use serde::Serialize;
+
+#[path = "support/numeric.rs"]
+mod numeric;
+#[path = "support/tolerance.rs"]
+mod tolerance;
 
 const PACK_STARTS: usize = 8;
 const SEED: u64 = 1;
 const MATRIX_ITERATIONS: usize = 100;
-const EXPECTED_CANDIDATE_HASH: u64 = 0xb540_4e82_2ccd_3603;
+const EXPECTED_CANDIDATE_HASH: u64 = 0x542f_a5f8_bb8b_459f;
 const EXPECTED_STOP_HASH: u64 = 0xea05_a0f8_b887_39bb;
 const PAPER: Paper = Paper {
     width_mm: 150.0,
@@ -98,6 +103,7 @@ struct RequestContract {
     candidate_hash: u64,
     stop_contract: String,
     stop_hash: u64,
+    first_candidate_json: String,
     first_candidate_hash: u64,
     first_stop: String,
 }
@@ -213,6 +219,70 @@ fn contract_hash(text: &str) -> u64 {
         .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
             (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
         })
+}
+
+fn quantize_candidate_floats(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Number(number) if number.is_f64() => {
+            let raw = number.as_f64().expect("f64 JSON number");
+            let quantized = (raw / tolerance::CP_POS_TOL).round();
+            let quantized = if quantized == 0.0 { 0.0 } else { quantized };
+            *value = serde_json::Value::String(format!("f64q:{quantized:.0}"));
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                quantize_candidate_floats(value);
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            for value in fields.values_mut() {
+                quantize_candidate_floats(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn candidate_contract_hash(json: &str) -> u64 {
+    let mut value: serde_json::Value =
+        serde_json::from_str(json).expect("生成した候補JSONを読み直せる");
+    quantize_candidate_floats(&mut value);
+    contract_hash(&serde_json::to_string(&value).expect("量子化した候補JSONを書ける"))
+}
+
+fn assert_json_text_near(got: &str, want: &str, tolerance: f64, label: &str) {
+    let got: serde_json::Value = serde_json::from_str(got).expect("比較する候補JSONを読める");
+    let want: serde_json::Value = serde_json::from_str(want).expect("比較する基準候補JSONを読める");
+    numeric::assert_serialized_values_near(&got, &want, tolerance, label);
+}
+
+fn assert_request_contract_near(got: &RequestContract, want: &RequestContract, label: &str) {
+    assert_json_text_near(
+        &got.candidate_json,
+        &want.candidate_json,
+        tolerance::CP_POS_TOL,
+        &format!("{label}: candidate_json"),
+    );
+    assert!(
+        got.candidate_hash == want.candidate_hash,
+        "{label}: candidate_hash"
+    );
+    assert!(
+        got.stop_contract == want.stop_contract,
+        "{label}: stop_contract"
+    );
+    assert!(got.stop_hash == want.stop_hash, "{label}: stop_hash");
+    assert_json_text_near(
+        &got.first_candidate_json,
+        &want.first_candidate_json,
+        tolerance::CP_POS_TOL,
+        &format!("{label}: first_candidate_json"),
+    );
+    assert!(
+        got.first_candidate_hash == want.first_candidate_hash,
+        "{label}: first_candidate_hash"
+    );
+    assert!(got.first_stop == want.first_stop, "{label}: first_stop");
 }
 
 fn calculate_candidate(
@@ -391,11 +461,12 @@ fn execute_request(
         .contract_tag()
         .to_owned();
     Ok(RequestContract {
-        candidate_hash: contract_hash(&candidate_json),
+        candidate_hash: candidate_contract_hash(&candidate_json),
         stop_hash: contract_hash(&stop_contract),
-        first_candidate_hash: contract_hash(&first_candidate_json),
+        first_candidate_hash: candidate_contract_hash(&first_candidate_json),
         candidate_json,
         stop_contract,
+        first_candidate_json,
         first_stop,
     })
 }
@@ -462,12 +533,14 @@ fn proposal_matrix_contract() {
         assert_eq!(requests.len(), request_count);
         for (request_index, request) in requests.into_iter().enumerate() {
             if let Some(want) = &reference {
-                assert_eq!(
+                assert_request_contract_near(
                     &request,
                     want,
-                    "反復{}・要求{}で結果または停止理由が入れ替わった",
-                    iteration + 1,
-                    request_index + 1
+                    &format!(
+                        "反復{}・要求{}で結果または停止理由",
+                        iteration + 1,
+                        request_index + 1
+                    ),
                 );
             } else {
                 reference = Some(request);

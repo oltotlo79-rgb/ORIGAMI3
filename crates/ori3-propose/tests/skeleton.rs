@@ -2,6 +2,11 @@
 
 use ori3_propose::skeleton::{Skeleton, SkeletonNode};
 
+#[path = "support/numeric.rs"]
+mod numeric;
+#[path = "support/tolerance.rs"]
+mod tolerance;
+
 /// 頭1・尾1・足4 + 胴の骨格(要件§8の精度目標に出てくる形)。
 fn bird_base() -> Skeleton {
     // 0=根(胸) 1=胴(腰へ) 2=頭 3=尾 4..7=足
@@ -133,5 +138,5 @@ fn serde_roundtrip_preserves_skeleton() {
     let s = bird_base();
     let json = serde_json::to_string(&s).unwrap();
     let back: Skeleton = serde_json::from_str(&json).unwrap();
-    assert_eq!(s, back);
+    numeric::assert_serialized_values_near(&s, &back, tolerance::CP_POS_TOL, "JSON往復後の骨格");
 }

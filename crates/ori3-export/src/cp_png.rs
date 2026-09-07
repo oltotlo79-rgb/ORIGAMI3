@@ -28,7 +28,7 @@ pub fn cp_png(doc: &Document, opts: &CpSvgOptions, long_side_px: u32) -> Result<
 
     let size = tree.size();
     let (sw, sh) = (size.width(), size.height());
-    if !(sw > 0.0 && sh > 0.0) {
+    if sw.is_nan() || sh.is_nan() || sw <= 0.0 || sh <= 0.0 {
         return Err("紙の大きさが読み取れませんでした".to_string());
     }
     // 長辺を指定の点数に合わせ、短辺は縦横比のまま(最低1点)

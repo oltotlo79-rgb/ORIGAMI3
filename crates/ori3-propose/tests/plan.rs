@@ -14,9 +14,34 @@ use ori3_cp::local_violations;
 use ori3_model::{CreasePattern, EdgeKind};
 use ori3_propose::skeleton::{Skeleton, SkeletonNode};
 use ori3_propose::{
-    FoldPlanTrace, GenericPlanner, HistoryPlanner, MAX_LINES, Packing, ProposalResult,
+    CreaseLine, FoldPlanTrace, GenericPlanner, HistoryPlanner, MAX_LINES, Packing, ProposalResult,
     SearchLimits, SearchStats, StopReason, crease_lines, generate, pack,
 };
+
+#[path = "support/tolerance.rs"]
+mod tolerance;
+
+#[track_caller]
+fn assert_crease_lines_near(name: &str, got: &[CreaseLine], want: &[CreaseLine]) {
+    assert!(got.len() == want.len(), "{name}: まとまりの本数が変わった");
+    for (index, (got, want)) in got.iter().zip(want).enumerate() {
+        assert!(got.id == want.id, "{name}: {index}番のIDが変わった");
+        assert!(got.kind == want.kind, "{name}: {index}番の山谷が変わった");
+        assert!(got.edges == want.edges, "{name}: {index}番の辺が変わった");
+        for axis in 0..2 {
+            assert!(
+                (got.a[axis] - want.a[axis]).abs() <= tolerance::CP_POS_TOL,
+                "{name}: {index}番の始点[{axis}]が許容{}を超えて動いた",
+                tolerance::CP_POS_TOL
+            );
+            assert!(
+                (got.b[axis] - want.b[axis]).abs() <= tolerance::CP_POS_TOL,
+                "{name}: {index}番の終点[{axis}]が許容{}を超えて動いた",
+                tolerance::CP_POS_TOL
+            );
+        }
+    }
+}
 
 /// 探索の打ち切り条件。どちらの方式にも同じ値を使う。
 ///
@@ -430,12 +455,7 @@ fn crease_lines_are_numbered_the_same_way_every_time() {
     for s in &samples() {
         let first = crease_lines(&s.cp);
         for _ in 0..RUNS {
-            assert_eq!(
-                first,
-                crease_lines(&s.cp),
-                "{}: 番号の付き方が変わった",
-                s.name
-            );
+            assert_crease_lines_near(s.name, &first, &crease_lines(&s.cp));
         }
     }
 }

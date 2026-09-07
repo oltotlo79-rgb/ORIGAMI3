@@ -284,7 +284,7 @@ fn segment_pierces(start: DVec3, end: DVec3, triangle: &[DVec3; 3]) -> bool {
         return false;
     }
     let t = edge2.dot(q) / determinant;
-    if !(t > INTERSECTION_TOLERANCE && t < 1.0 - INTERSECTION_TOLERANCE) {
+    if t.is_nan() || t <= INTERSECTION_TOLERANCE || t >= 1.0 - INTERSECTION_TOLERANCE {
         return false;
     }
 
