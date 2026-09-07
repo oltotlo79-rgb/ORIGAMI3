@@ -16,6 +16,11 @@ hook_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$hook_dir/../.." && pwd)
 scope_warning_script="$repo_root/scripts/hooks/checks/test-claim-scope-warning.ps1"
 scope_health_script="$repo_root/scripts/hooks/checks/hook-health.ps1"
+contract_runner_script="$repo_root/scripts/hooks/checks/run-hook-checks.ps1"
+full_contract_expected=0
+if [ -f "$repo_root/.github/known-defect-shapes.json" ] || [ -f "$repo_root/scripts/hooks/checks/no-allow-attribute.ps1" ]; then
+    full_contract_expected=1
+fi
 scope_powershell=
 if command -v powershell.exe >/dev/null 2>&1; then
     scope_powershell=powershell.exe
@@ -102,16 +107,48 @@ if [ -n "$scope_powershell" ] && [ -f "$scope_warning_script" ]; then
         exit 2
     elif [ "$scope_warning_status" -ne 0 ]; then
         record_scope_health_failure "$scope_warning_status" scanner-exit
-        printf '%s\n' "[WARN] test-claim scope warning scan could not run (exit $scope_warning_status); commit remains nonblocking" >&2
+        if [ "$full_contract_expected" -eq 1 ]; then
+            printf '%s\n' "[NG] test-claim scope warning scan could not run (exit $scope_warning_status)" >&2
+            exit "$scope_warning_status"
+        fi
+        printf '%s\n' "[WARN] test-claim scope warning scan could not run (exit $scope_warning_status); standalone fixture remains nonblocking" >&2
     else
         record_scope_health_success
     fi
 elif [ -f "$scope_warning_script" ]; then
     record_scope_health_failure 127 powershell-unavailable
+    if [ "$full_contract_expected" -eq 1 ]; then
+        printf '%s\n' '[NG] PowerShell is unavailable; test-claim scope warning scan could not run' >&2
+        exit 127
+    fi
     printf '%s\n' '[WARN] PowerShell is unavailable; test-claim scope warning scan was skipped' >&2
 else
     record_scope_health_failure 127 scanner-script-missing
-    printf '%s\n' '[WARN] test-claim scope warning scan script is unavailable; commit remains nonblocking' >&2
+    if [ "$full_contract_expected" -eq 1 ]; then
+        printf '%s\n' '[NG] test-claim scope warning scan script is unavailable' >&2
+        exit 127
+    fi
+    printf '%s\n' '[WARN] test-claim scope warning scan script is unavailable; standalone fixture remains nonblocking' >&2
+fi
+
+# Run the five blocking source-policy checks exactly once against the staged
+# snapshot. Minimal scanner-only self-test repositories predate this contract;
+# a real ORIGAMI3 repository is identified by the catalog/check implementation
+# above and must fail closed when the runner cannot start.
+if [ -f "$contract_runner_script" ]; then
+    if [ -z "$scope_powershell" ]; then
+        printf '%s\n' '[NG] PowerShell is unavailable; blocking hook checks could not run' >&2
+        exit 127
+    fi
+    "$scope_powershell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$contract_runner_script" -Mode Staged -RepositoryRoot "$repo_root"
+    contract_status=$?
+    if [ "$contract_status" -ne 0 ]; then
+        printf '%s\n' "[NG] blocking hook checks failed (exit $contract_status)" >&2
+        exit "$contract_status"
+    fi
+elif [ "$full_contract_expected" -eq 1 ]; then
+    printf '%s\n' '[NG] scripts/hooks/checks/run-hook-checks.ps1 is unavailable' >&2
+    exit 127
 fi
 
 # 実装を進めたのに利用者への報告を書かない状態を、重いRust検査の前に止める。

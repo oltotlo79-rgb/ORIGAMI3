@@ -25,6 +25,7 @@ $FixturePaths = @(
     "scripts/check-roadmap-governance.ps1",
     "scripts/doc-link-audit.ps1",
     "scripts/hooks/pre-commit",
+    "scripts/hooks/checks/run-hook-checks.ps1",
     ".github/workflows/ci.yml",
     "apps/desktop/src-tauri/src/surface_order_sa_endpoint_heavy.rs",
     "apps/desktop/src-tauri/src/surface_order_acceptance.rs"
@@ -530,6 +531,26 @@ exit 0
     Assert-True ($result.Output.Contains("ORIGAMI3_CI_CONTRACT_WARNING")) "warning-onlyの読取失敗を表示すること"
     Assert-True ($result.Output.Contains("fail-closedで拒否しました")) "warning-onlyをcallerが拒否した理由を表示すること"
 
+    Write-Host "[33/34] source policy stepがCIから欠けたらC08で拒否する"
+    $caseRoot = New-CaseFixture "c08-hook-checks-step-missing"
+    Set-ExactReplacement `
+        (Join-Path $caseRoot ".github/workflows/ci.yml") `
+        'powershell -NoProfile -ExecutionPolicy Bypass -File scripts/hooks/checks/run-hook-checks.ps1 -Mode Tree -RepositoryRoot .' `
+        'powershell -NoProfile -ExecutionPolicy Bypass -File scripts/hooks/checks/run-hook-checks-MISSING.ps1 -Mode Tree -RepositoryRoot .'
+    $result = Invoke-IsolatedChecker $caseRoot $PowerShellPath
+    Assert-Result $result $false "[NG][C08]" "source policy stepの欠落を静的契約で拒否すること"
+    Assert-True ($result.Output.Contains("hook_checks_call=False")) "source policy step欠落の理由を表示すること"
+
+    Write-Host "[34/34] source policy commandが§10.6の表から欠けたら拒否する"
+    $caseRoot = New-CaseFixture "hook-checks-table-row-missing"
+    Set-ExactReplacement `
+        (Join-Path $caseRoot "docs/rules/03-品質ゲート.md") `
+        '| 25 | **禁止形・追跡fixture・ignore理由・既知欠陥形の共通関門**（pre-commitの既知欠陥形だけはHEADより悪化時に停止、`check.ps1`・`check-ci.ps1`・CIは絶対値で停止） | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/hooks/checks/run-hook-checks.ps1 -Mode Tree -RepositoryRoot .` |' `
+        '| 25 | **禁止形・追跡fixture・ignore理由・既知欠陥形の共通関門**（pre-commitの既知欠陥形だけはHEADより悪化時に停止、`check.ps1`・`check-ci.ps1`・CIは絶対値で停止） | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/hooks/checks/run-hook-checks-MISSING.ps1 -Mode Tree -RepositoryRoot .` |'
+    $result = Invoke-IsolatedChecker $caseRoot $PowerShellPath
+    Assert-Result $result $false "§10.6 の表にCI実コマンドが厳密に1行ありません" "source policy commandの表欠落を拒否すること"
+    Assert-True ($result.Output.Contains("run-hook-checks.ps1 -Mode Tree")) "表から欠けたsource policy commandを表示すること"
+
     $repositorySourcesUnchanged = $true
     foreach ($relativePath in $FixturePaths) {
         $currentHash = (Get-FileHash -LiteralPath (Join-Path $RepositoryRoot $relativePath) -Algorithm SHA256).Hash
@@ -540,7 +561,7 @@ exit 0
     }
     Assert-True $repositorySourcesUnchanged "隔離検査が本体fixtureを書き換えないこと"
 
-    Write-Host "[OK] check-ci静的契約とgovernance production形の隔離テスト: 32/32件、$script:AssertionCount assertions"
+    Write-Host "[OK] check-ci静的契約とgovernance production形の隔離テスト: 34/34件、$script:AssertionCount assertions"
 }
 finally {
     Remove-TestSandbox

@@ -495,6 +495,7 @@ try {
         exit 1
     }
     if ($FailOnDecrease -and ($decreaseCount -gt 0 -or $inventoryDriftCount -gt 0)) {
+        Write-Output "[NG] 既知の欠陥形ラチェット: 増加 $increaseCount 種、減少 $decreaseCount 種、台帳移動 $inventoryDriftCount 件"
         Write-Output "[NG] 既知の欠陥形ラチェット: -FailOnDecrease により、減少または台帳移動を定義更新まで失敗扱いにします。"
         exit 1
     }

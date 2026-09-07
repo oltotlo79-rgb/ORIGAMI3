@@ -36,6 +36,9 @@ jobs:
       - name: Verify roadmap governance and negative tests
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-roadmap-governance.ps1
 
+      - name: Verify blocking source policy checks
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/hooks/checks/run-hook-checks.ps1 -Mode Tree -RepositoryRoot .
+
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:

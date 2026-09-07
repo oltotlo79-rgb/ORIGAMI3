@@ -28,6 +28,8 @@ if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
 }
 $root = [IO.Path]::GetFullPath($RepositoryRoot).TrimEnd([char[]]"\\/")
 $receiptHelper = Join-Path $scriptDirectory "check-receipt.ps1"
+$hookChecksRunner = Join-Path $scriptDirectory "hooks\checks\run-hook-checks.ps1"
+$powerShellPath = (Get-Process -Id $PID).Path
 $receiptAvailable = $false
 $rustW4Arguments = @(
     "test", "--workspace", "--no-fail-fast", "--",
@@ -99,6 +101,13 @@ try {
     $global:LASTEXITCODE = 0
     $beforeTracked = (& git -C $root status --porcelain --untracked-files=no) -join "`n"
     $beforeTrackedStatus = $LASTEXITCODE
+
+    # Source-policy checks are content-sensitive and must run on every call,
+    # including when the five build/test checks can reuse a receipt.
+    Invoke-Check "source policy checks (tree)" $powerShellPath @(
+        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-File", $hookChecksRunner, "-Mode", "Tree", "-RepositoryRoot", $root
+    )
 
     $reuseAllChecks = $false
     $fullReceiptContext = $null
