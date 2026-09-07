@@ -929,4 +929,41 @@ describe("store split boundary", () => {
     expect(zustandFactories).toHaveLength(1);
     expect(zustandFactories[0]).toBe("./appStore.ts");
   });
+
+  it("keeps Document ownership in exactly one slice state", () => {
+    const owners = Object.entries(PRODUCTION_SOURCES).flatMap(([path, text]) => {
+      if (!path.startsWith("./slices/") || !path.endsWith(".ts")) return [];
+      return [...text.matchAll(/^export interface (\w+SliceState)\s*\{([\s\S]*?)^\}/gm)]
+        .filter(([, , body]) => /^\s*\w+\??:\s*Document(?:\s*\|\s*null)?;/m.test(body))
+        .map(([, state]) => ({ path, state }));
+    });
+
+    expect(owners).toEqual([
+      { path: "./slices/documentSlice.ts", state: "DocumentSliceState" },
+    ]);
+  });
+
+  it("allows useState only in seven display-only components", () => {
+    const callSites = Object.entries(PRODUCTION_SOURCES).flatMap(([path, text]) => {
+      if (/\.test\.(?:ts|tsx)$/.test(path)) return [];
+      return [...text.matchAll(/\buseState\s*(?:<|\()/g)].map(() => path);
+    });
+    const counts = Object.fromEntries(
+      [...new Set(callSites)].sort().map((path) => [
+        path,
+        callSites.filter((candidate) => candidate === path).length,
+      ]),
+    );
+
+    expect(counts).toEqual({
+      "../components/ColorPickerPopover.tsx": 4,
+      "../components/Tooltip.tsx": 1,
+      "../components/Viewer3D/DeferredViewer3D.tsx": 3,
+      "../components/Viewer3D/ViewCube.tsx": 1,
+      "../components/Viewer3D/ViewerOverlayStack.tsx": 1,
+      "../components/dialogs/PaperPositionEditor.tsx": 2,
+      "../components/dialogs/SkeletonPreview.tsx": 2,
+    });
+    expect(callSites).toHaveLength(14);
+  });
 });

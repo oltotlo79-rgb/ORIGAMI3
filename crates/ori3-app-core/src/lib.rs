@@ -4864,6 +4864,48 @@ mod tests {
         assert!(!opened.dirty);
         assert_eq!(opened.path.as_deref(), Some(target));
         assert_eq!(opened.pose_angles, None);
+
+        let replay_target = "browser-file://file-system/session/再導出.ori3";
+        let mut replay_source = diagonal_core();
+        replay_source
+            .invoke_json(&apply_fold_through_request())
+            .expect("保存前に宣言的な折り手順を1件適用できる");
+        let derived_before_save = replay_source
+            .invoke_json(&request(
+                "sequence_replay",
+                json!({ "upTo": 1, "t": 1.0, "soft": null }),
+            ))
+            .expect("保存前に3D状態を手順から導出できる");
+        let prepared = replay_source
+            .invoke_json(&request(
+                "__web_document_save_prepare",
+                json!({ "path": replay_target }),
+            ))
+            .expect("手順を持つ作品の保存内容を準備できる");
+        let prepared: Value = serde_json::from_str(&prepared).expect("保存準備JSON");
+        let replay_content = prepared["content"].as_str().expect("保存する作品本文");
+
+        let mut replay_opened = Ori3AppCore::new();
+        replay_opened
+            .invoke_json(&request(
+                "__web_document_open_source",
+                json!({ "path": replay_target, "source": replay_content }),
+            ))
+            .expect("保存した作品本文を読込用にstageできる");
+        replay_opened
+            .invoke_json(&request("document_open", json!({ "path": replay_target })))
+            .expect("保存した展開図と折り手順を読み込める");
+        let derived_after_open = replay_opened
+            .invoke_json(&request(
+                "sequence_replay",
+                json!({ "upTo": 1, "t": 1.0, "soft": null }),
+            ))
+            .expect("読込後に3D状態を同じ手順から再導出できる");
+        assert_eq!(
+            serde_json::from_str::<Value>(&derived_after_open).expect("読込後の導出JSON"),
+            serde_json::from_str::<Value>(&derived_before_save).expect("保存前の導出JSON"),
+            "保存していない3D状態を展開図と折り手順から同じ結果へ再導出する"
+        );
     }
 
     #[test]
@@ -5479,6 +5521,48 @@ mod tests {
             assert_eq!(error, expected);
             assert_eq!(core, before);
         }
+
+        let unknown_requests = [
+            request(
+                "edit_apply",
+                json!({ "op": { "type": "UnknownOperation" } }),
+            ),
+            request(
+                "edit_apply_batch",
+                json!({
+                    "ops": [
+                        {
+                            "type": "AddSegment",
+                            "a": [0.0, 0.0],
+                            "b": [1.0, 1.0],
+                            "kind": "Mountain"
+                        },
+                        { "type": "UnknownOperation" }
+                    ]
+                }),
+            ),
+            request(
+                "proposal_apply",
+                json!({
+                    "cp": core.doc.cp.clone(),
+                    "steps": [{
+                        "id": 0,
+                        "kind": "UnknownOperation",
+                        "drivers": [],
+                        "layer_order": null,
+                        "note": ""
+                    }]
+                }),
+            ),
+        ];
+        for invalid_request in unknown_requests {
+            let before = core.clone();
+            let error = core
+                .invoke_json(&invalid_request)
+                .expect_err("未知の操作enumを受理しない");
+            assert!(error.contains("引数を読み取れません"), "{error}");
+            assert_eq!(core, before, "未知操作の部分反映は0件");
+        }
     }
 
     #[test]
@@ -5570,6 +5654,7 @@ mod tests {
     #[test]
     fn fold_all_detection_on_transports_pairs_through_browser_wire() {
         let (mut core, percent) = fold_all_core_with_detection(true);
+        let before_warning = core.clone();
         let outcome = core
             .fold_all_preview(percent, None)
             .expect("検出ONでも貫通姿勢を返す");
@@ -5589,6 +5674,7 @@ mod tests {
                 .iter()
                 .any(|warning| warning == ori3_rigid::PENETRATION_WARNING)
         );
+        assert_eq!(core, before_warning, "貫通警告の一時表示は文書を変えない");
 
         let response = core
             .invoke_json(&request(
@@ -5609,6 +5695,16 @@ mod tests {
                 .iter()
                 .any(|warning| warning == ori3_rigid::PENETRATION_WARNING)
         );
+
+        let warned_document = core.doc.clone();
+        let undo_depth = core.undo_stack.len();
+        let mut display = core.doc.display.clone();
+        display.front_color[0] ^= 1;
+        core.edit_apply(EditOp::SetDisplay { display })
+            .expect("貫通警告の後も次の編集を止めない");
+        assert_eq!(core.undo_stack.len(), undo_depth + 1);
+        core.edit_undo().expect("警告後の編集も1回で元に戻せる");
+        assert_eq!(core.doc, warned_document);
     }
 
     #[test]
@@ -5889,6 +5985,17 @@ mod tests {
         );
         assert_eq!(core, before);
 
+        let warned_document = core.doc.clone();
+        let undo_depth = core.undo_stack.len();
+        let mut display = core.doc.display.clone();
+        display.back_color[0] ^= 1;
+        core.edit_apply(EditOp::SetDisplay { display })
+            .expect("平坦条件警告の後も次の編集を止めない");
+        assert_eq!(core.undo_stack.len(), undo_depth + 1);
+        core.edit_undo().expect("警告後の編集も1回で元に戻せる");
+        assert_eq!(core.doc, warned_document);
+        let before_errors = core.clone();
+
         for percent in [-1.0, 100.01, f64::NAN] {
             let error = match core.fold_all_preview(percent, None) {
                 Ok(_) => panic!("invalid percent must fail"),
@@ -5898,7 +6005,7 @@ mod tests {
                 error
                     .starts_with("全部の折り目を動かす割合は有限な0%以上100以下で指定してください")
             );
-            assert_eq!(core, before);
+            assert_eq!(core, before_errors);
         }
 
         let error = match core.fold_all_preview(
@@ -5915,7 +6022,7 @@ mod tests {
             error,
             "一時表示の出発角は有限な-180度以上180度以下で指定してください（辺ID 4: 181度）"
         );
-        assert_eq!(core, before);
+        assert_eq!(core, before_errors);
     }
 
     #[test]

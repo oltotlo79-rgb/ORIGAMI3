@@ -88,6 +88,23 @@ fn sample_document() -> Document {
     }
 }
 
+fn collect_json_keys(value: &serde_json::Value, keys: &mut std::collections::BTreeSet<String>) {
+    match value {
+        serde_json::Value::Object(object) => {
+            for (key, child) in object {
+                keys.insert(key.clone());
+                collect_json_keys(child, keys);
+            }
+        }
+        serde_json::Value::Array(array) => {
+            for child in array {
+                collect_json_keys(child, keys);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// 種を固定した決定的な擬似乱数(splitmix64)。作品ファイルへ入れる座標を作る。
 ///
 /// 実行するたびに同じ値の列を作るので、どの計算機で走らせても同じ検査になる。
@@ -282,6 +299,49 @@ fn test_document_json_roundtrip() {
     );
     let back: Document = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(doc, back);
+}
+
+#[test]
+fn saved_document_contains_zero_derived_3d_keys() {
+    let value = serde_json::to_value(SavedDocument::new(sample_document()))
+        .expect("作品を保存JSONへ変換できる");
+    let mut keys = std::collections::BTreeSet::new();
+    collect_json_keys(&value, &mut keys);
+
+    // 実名はFrame3D/Face3D、FlatState、SoftMeshとapp-coreの導出応答から取る。
+    // `layer_order`と仕上げ3値は宣言的な手順なので、この完全一致のkey群には含まれない。
+    let derived_3d_keys = [
+        "angles",
+        "best_effort",
+        "closure_rms",
+        "contact_detected",
+        "converged",
+        "faces",
+        "frame",
+        "layer",
+        "mesh",
+        "mirrored",
+        "order",
+        "placements",
+        "polygon",
+        "positions",
+        "self_intersection_pairs",
+        "soft_mesh",
+        "surface_rank",
+        "triangle_faces",
+        "triangle_layers",
+        "triangles",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<std::collections::BTreeSet<_>>();
+    let present = keys
+        .intersection(&derived_3d_keys)
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+
+    assert!(present.is_empty(), "保存JSONに導出3D keyが入った: {present:?}");
+    assert_eq!(present.len(), 0, "保存JSONの導出3D keyは0個");
 }
 
 #[test]

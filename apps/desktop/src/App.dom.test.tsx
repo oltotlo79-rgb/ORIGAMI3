@@ -25,9 +25,15 @@ const viewerPayload = vi.hoisted(() => ({
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
-vi.mock("./components/ToolRail", () => ({ ToolRail: () => null }));
-vi.mock("./components/ContextPanel", () => ({ ContextPanel: () => null }));
-vi.mock("./components/CpEditor/CpEditor", () => ({ CpEditor: () => null }));
+vi.mock("./components/ToolRail", () => ({
+  ToolRail: () => <nav aria-label="ツールレール" />,
+}));
+vi.mock("./components/ContextPanel", () => ({
+  ContextPanel: () => <aside aria-label="コンテキストパネル" />,
+}));
+vi.mock("./components/CpEditor/CpEditor", () => ({
+  CpEditor: () => <div data-testid="cp-editor" />,
+}));
 vi.mock("./components/Viewer3D/Viewer3D", () => ({
   Viewer3D: (props: {
     fitRef: React.RefObject<(() => void) | null>;
@@ -44,7 +50,9 @@ vi.mock("./components/Viewer3D/Viewer3D", () => ({
     );
   },
 }));
-vi.mock("./components/Timeline", () => ({ Timeline: () => null }));
+vi.mock("./components/Timeline", () => ({
+  Timeline: () => <div data-testid="timeline" />,
+}));
 vi.mock("./components/RecoveryDialog", () => ({ RecoveryDialog: () => null }));
 vi.mock("./components/PaneSplitter", () => ({ PaneSplitter: () => null }));
 vi.mock("./components/ContextPanelSplitter", () => ({ ContextPanelSplitter: () => null }));
@@ -108,6 +116,37 @@ afterEach(() => {
     openExport: realOpenExport,
     setSelection: realSetSelection,
     ...initialStatusState,
+  });
+});
+
+describe("常設UIの4区画(設計原則3)", () => {
+  it("ツールレール・2D・3D+タイムライン・コンテキストの4/4だけを常設する", () => {
+    const { container } = render(<App />);
+    const mainRow = container.querySelector<HTMLElement>(".main-row");
+    const toolbar = screen.getByRole("banner");
+    const toolRail = screen.getByRole("navigation", { name: "ツールレール" });
+    const pane2d = container.querySelector<HTMLElement>(
+      ".main-row > section.pane.pane-2d",
+    );
+    const pane3d = container.querySelector<HTMLElement>(
+      ".main-row > section.pane.pane-3d",
+    );
+    const contextPanel = screen.getByRole("complementary", {
+      name: "コンテキストパネル",
+    });
+
+    expect(mainRow).not.toBeNull();
+    expect(pane2d).not.toBeNull();
+    expect(pane3d).not.toBeNull();
+    expect(Array.from(mainRow!.children)).toEqual([toolRail, pane2d, pane3d]);
+    expect(pane2d!.querySelector('[data-testid="cp-editor"]')).not.toBeNull();
+    expect(pane3d!.querySelector('[data-testid="timeline"]')).not.toBeNull();
+    expect(contextPanel.parentElement).toBe(container);
+    expect(Array.from(container.children)).toEqual([toolbar, mainRow, contextPanel]);
+
+    const permanentAreas = [toolRail, pane2d, pane3d, contextPanel];
+    expect(permanentAreas).toHaveLength(4);
+    expect(new Set(permanentAreas).size).toBe(4);
   });
 });
 
