@@ -168,14 +168,14 @@ if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
 
 [void][IO.Directory]::CreateDirectory($sandboxRoot)
 try {
-    Write-Output "[1/9] -Init は -AllowedPaths 無しでは失敗する(不合格例)"
+    Write-Output "[1/11] -Init は -AllowedPaths 無しでは失敗する(不合格例)"
     $repo1 = New-DisposableGitRepo "no-allowed-paths"
     $receipt1 = Join-Path $sandboxRoot "receipt1.json"
     $result = Invoke-Checker @{ RepoRoot = $repo1; ReceiptPath = $receipt1; Init = $true }
     Assert-Equal $result.ExitCode 2 "AllowedPaths無しの-Initを合格扱いしてはならない" $result.Output
     Assert-Contains $result.Output "AllowedPaths" "AllowedPaths必須である旨を明示すること"
 
-    Write-Output "[2/9] -Init は開始時点の既存差分(2件)を基準として記録する"
+    Write-Output "[2/11] -Init は開始時点の既存差分(2件)を基準として記録する"
     $repo2 = New-DisposableGitRepo "init-records-baseline"
     $receipt2 = Join-Path $sandboxRoot "receipt2.json"
     $script:KnownReceiptPaths.Add($receipt2)
@@ -184,50 +184,66 @@ try {
     Assert-Contains $result.Output "既存差分 2 件" "開始時点の既存差分2件(tracked.txtとpre-existing-untracked.txt)を記録すること"
     Assert-True (Test-Path -LiteralPath $receipt2 -PathType Leaf) "receiptファイルを作成すること"
 
-    Write-Output "[3/9] 変更が無ければ -Verify は合格する"
+    Write-Output "[3/11] 変更が無ければ -Verify は合格する"
     $result = Invoke-Checker @{ RepoRoot = $repo2; ReceiptPath = $receipt2; Verify = $true }
     Assert-Equal $result.ExitCode 0 "変更が無ければ合格すること" $result.Output
     Assert-Contains $result.Output "[OK]" "合格を明示すること"
 
-    Write-Output "[4/9] 許可pattern内の新規pathは -Verify に合格する"
+    Write-Output "[4/11] 許可pattern内の新規pathは -Verify に合格する"
     [IO.File]::WriteAllText((Join-Path $repo2 "scripts/new-tool.ps1"), "new tool`n", [Text.UTF8Encoding]::new($false))
     $result = Invoke-Checker @{ RepoRoot = $repo2; ReceiptPath = $receipt2; Verify = $true }
     Assert-Equal $result.ExitCode 0 "許可pattern内の新規pathは合格扱いにすること" $result.Output
 
-    Write-Output "[5/9] 許可pattern外の新規pathは -Verify に不合格になる(不合格例)"
+    Write-Output "[5/11] 許可pattern外の新規pathは -Verify に不合格になる(不合格例)"
     [IO.File]::WriteAllText((Join-Path $repo2 "outside-scope.txt"), "should not be touched here`n", [Text.UTF8Encoding]::new($false))
     $result = Invoke-Checker @{ RepoRoot = $repo2; ReceiptPath = $receipt2; Verify = $true }
     Assert-Equal $result.ExitCode 1 "許可範囲外のpathを合格扱いしてはならない" $result.Output
     Assert-Contains $result.Output "許可範囲外のpathを変更しました: outside-scope.txt" "許可範囲外のpathを名指しすること"
     Remove-Item -LiteralPath (Join-Path $repo2 "outside-scope.txt") -Force
 
-    Write-Output "[6/9] 開始時点で既に汚れていたファイルをさらに変更すると -Verify は不合格になる(不合格例)"
+    Write-Output "[6/11] 開始時点で既に汚れていたファイルをさらに変更すると -Verify は不合格になる(不合格例)"
     [IO.File]::WriteAllText((Join-Path $repo2 "tracked.txt"), "pre-existing uncommitted edit -- further changed by an agent`n", [Text.UTF8Encoding]::new($false))
     $result = Invoke-Checker @{ RepoRoot = $repo2; ReceiptPath = $receipt2; Verify = $true }
     Assert-Equal $result.ExitCode 1 "既存差分のさらなる変更を合格扱いしてはならない" $result.Output
     Assert-Contains $result.Output "既存差分を変更しました: tracked.txt" "既存差分の変更を名指しすること"
 
-    Write-Output "[7/9] receiptが無い状態での -Verify は不合格になる(不合格例)"
+    Write-Output "[7/11] receiptが無い状態での -Verify は不合格になる(不合格例)"
     $repo3 = New-DisposableGitRepo "verify-without-receipt"
     $receipt3 = Join-Path $sandboxRoot "receipt3-never-created.json"
     $result = Invoke-Checker @{ RepoRoot = $repo3; ReceiptPath = $receipt3; Verify = $true }
     Assert-Equal $result.ExitCode 1 "receiptが無い-Verifyを合格扱いしてはならない" $result.Output
     Assert-Contains $result.Output "receiptが見つかりません" "receipt不在を明示すること"
 
-    Write-Output "[8/9] 別リポジトリのreceiptでの -Verify は不合格になる(不合格例)"
+    Write-Output "[8/11] 別リポジトリのreceiptでの -Verify は不合格になる(不合格例)"
     $repo4 = New-DisposableGitRepo "different-repo"
     $result = Invoke-Checker @{ RepoRoot = $repo4; ReceiptPath = $receipt2; Verify = $true }
     Assert-Equal $result.ExitCode 1 "別リポジトリのreceiptを合格扱いしてはならない" $result.Output
     Assert-Contains $result.Output "別のリポジトリ" "リポジトリ不一致を明示すること"
 
-    Write-Output "[9/9] gitリポジトリでない場所を指定すると失敗する(不合格例)"
+    Write-Output "[9/11] gitリポジトリでない場所を指定すると失敗する(不合格例)"
     $notARepo = Join-Path $sandboxRoot "not-a-repo"
     [void][IO.Directory]::CreateDirectory($notARepo)
     $result = Invoke-Checker @{ RepoRoot = $notARepo; Verify = $true }
     Assert-Equal $result.ExitCode 2 "gitリポジトリでない場所はexit 2にすること" $result.Output
     Assert-Contains $result.Output "見つかりません" "リポジトリ不在を明示すること"
 
-    Write-Output ("check-worktree-boundary self-test passed: 9 cases, {0} assertions" -f $script:AssertionCount)
+    . $scriptPath -LoadFunctionsOnly
+    Write-Output "[10/11] 追跡内容snapshotは変更が無ければ一致する"
+    $repo5 = New-DisposableGitRepo "tracked-content-snapshot"
+    $beforeSnapshot = @(Get-WorktreeTrackedSnapshot -RepoRoot $repo5)
+    $unchangedSnapshot = @(Get-WorktreeTrackedSnapshot -RepoRoot $repo5)
+    $comparison = Compare-WorktreeTrackedSnapshots -Before $beforeSnapshot -After $unchangedSnapshot
+    Assert-True ([bool]$comparison.IsMatch) "同じ追跡内容とpath集合は一致すること"
+    Assert-Equal @($comparison.Violations).Count 0 "変更なしの違反数は0であること"
+
+    Write-Output "[11/11] 既存Mのfileがさらに変われば内容hash比較は不合格になる(不合格例)"
+    [IO.File]::WriteAllText((Join-Path $repo5 "tracked.txt"), "pre-existing M changed again after snapshot`n", [Text.UTF8Encoding]::new($false))
+    $changedSnapshot = @(Get-WorktreeTrackedSnapshot -RepoRoot $repo5)
+    $comparison = Compare-WorktreeTrackedSnapshots -Before $beforeSnapshot -After $changedSnapshot
+    Assert-True (-not [bool]$comparison.IsMatch) "既存Mのさらなる内容変更を一致扱いしてはならない"
+    Assert-Contains (@($comparison.Violations) -join "`n") "tracked.txt" "内容が変わった実名を出すこと"
+
+    Write-Output ("check-worktree-boundary self-test passed: 11 cases, {0} assertions" -f $script:AssertionCount)
 }
 finally {
     Remove-TestSandbox

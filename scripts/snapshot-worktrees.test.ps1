@@ -236,7 +236,7 @@ function Remove-TestSandbox {
 [void][IO.Directory]::CreateDirectory($SandboxRoot)
 
 try {
-    Write-Host "[1/4] the main worktree and derived worktree names snapshot and pass freshness check"
+    Write-Host "[1/5] the main worktree and derived worktree names snapshot and pass freshness check"
     $freshFixture = New-DisposableWorktreeFixture "fresh"
     New-TestFile (Join-Path $freshFixture.Worktree "scratchpad\note.md") "included markdown"
     New-TestFile (Join-Path $freshFixture.Worktree "scratchpad\nested\note.md") "included nested markdown"
@@ -269,13 +269,29 @@ try {
     $checkCopyRef = Invoke-Process -FileName "git" -Arguments @("-C", $freshFixture.Repository, "show-ref", "--verify", "--quiet", "refs/wip/ori3-push-check") -WorkingDirectory $freshFixture.Repository
     Assert-True ($checkCopyRef.ExitCode -ne 0) "a registered check copy outside the ori3-wt-* convention must be excluded" $checkCopyRef.Output
 
-    Write-Host "[2/4] a worktree without a snapshot fails in a new process"
+    Write-Host "[2/5] two thousand scratchpad markdown paths exceeding sixty thousand characters snapshot successfully"
+    $largeFixture = New-DisposableWorktreeFixture "large-scratchpad"
+    $largeScratchpadPaths = New-Object System.Collections.Generic.List[string]
+    foreach ($number in 1..2000) {
+        $relativePath = "scratchpad\bulk\pathspec-command-limit-entry-{0:D4}.md" -f $number
+        $largeScratchpadPaths.Add($relativePath)
+        New-TestFile (Join-Path $largeFixture.Worktree $relativePath) "large scratchpad entry $number"
+    }
+    $legacyPathLength = (($largeScratchpadPaths | ForEach-Object { '"' + $_ + '"' }) -join ' ').Length
+    Assert-True ($legacyPathLength -gt 60000) "two thousand scratchpad paths must exceed the legacy command-line limit input size"
+    $largeSnapshot = Invoke-SnapshotProcess -Fixture $largeFixture -Name "merge"
+    Assert-Equal $largeSnapshot.ExitCode 0 "large scratchpad snapshot must exit 0" $largeSnapshot.Output
+    $largeSnapshotTree = Invoke-TestGit $largeFixture.Repository @("ls-tree", "-r", "--name-only", "refs/wip/merge", "--", "scratchpad/bulk")
+    $largeSnapshotPaths = @($largeSnapshotTree -split "`r?`n" | Where-Object { $_ -like "scratchpad/bulk/*.md" })
+    Assert-Equal $largeSnapshotPaths.Count 2000 "every large scratchpad markdown path must be in the snapshot tree"
+
+    Write-Host "[3/5] a worktree without a snapshot fails in a new process"
     $missingFixture = New-DisposableWorktreeFixture "missing"
     $missingCheck = Invoke-SnapshotProcess -Fixture $missingFixture -Check
     Assert-True ($missingCheck.ExitCode -ne 0) "missing snapshot check must have a nonzero process exit code" $missingCheck.Output
     Assert-Contains $missingCheck.Output "refs/wip/merge" "missing snapshot output must name the derived reference"
 
-    Write-Host "[3/4] a snapshot older than source fails in a new process"
+    Write-Host "[4/5] a snapshot older than source fails in a new process"
     $staleFixture = New-DisposableWorktreeFixture "stale"
     $staleSnapshot = Invoke-SnapshotProcess -Fixture $staleFixture -Name "merge"
     Assert-Equal $staleSnapshot.ExitCode 0 "stale fixture must first create a snapshot" $staleSnapshot.Output
@@ -286,7 +302,7 @@ try {
     Assert-True ($staleCheck.ExitCode -ne 0) "stale snapshot check must have a nonzero process exit code" $staleCheck.Output
     Assert-Contains $staleCheck.Output "refs/wip/merge" "stale snapshot output must name the derived reference"
 
-    Write-Host "[4/4] a discovery result with no includable target fails visibly"
+    Write-Host "[5/5] a discovery result with no includable target fails visibly"
     $zeroFixture = New-ZeroTargetFixture
     $zeroCheck = Invoke-SnapshotProcess -Fixture $zeroFixture -Check -EnvironmentVariables @{ PATH = ($zeroFixture.FakeGitDirectory + ";" + $env:PATH) }
     Assert-True ($zeroCheck.ExitCode -ne 0) "zero targets must have a nonzero process exit code" $zeroCheck.Output

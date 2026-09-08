@@ -44,19 +44,22 @@ param(
     [string]$ReceiptPath,
     [switch]$Init,
     [string[]]$AllowedPaths,
-    [switch]$Verify
+    [switch]$Verify,
+    [switch]$LoadFunctionsOnly
 )
 
-Set-StrictMode -Version 2.0
-$ErrorActionPreference = "Stop"
-# 呼び出し元セッションの[Console]::OutputEncodingに関わらず、このscript自身の
-# Write-Output/Write-Hostを常にUTF-8で書き出す（review-staged-diff.ps1と同じ対策）。
-[Console]::OutputEncoding = [Text.UTF8Encoding]::new()
+if (-not $LoadFunctionsOnly) {
+    Set-StrictMode -Version 2.0
+    $ErrorActionPreference = "Stop"
+    # 呼び出し元セッションの[Console]::OutputEncodingに関わらず、このscript自身の
+    # Write-Output/Write-Hostを常にUTF-8で書き出す（review-staged-diff.ps1と同じ対策）。
+    [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
 
-if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
-    $RepoRoot = Split-Path -Parent $PSScriptRoot
+    if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
+        $RepoRoot = Split-Path -Parent $PSScriptRoot
+    }
+    $RepoRoot = [IO.Path]::GetFullPath($RepoRoot).TrimEnd([char[]]"\/")
 }
-$RepoRoot = [IO.Path]::GetFullPath($RepoRoot).TrimEnd([char[]]"\/")
 
 function ConvertTo-ProcessArgumentString {
     param([Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$ArgumentValues)
@@ -179,6 +182,78 @@ function Get-WorktreeDirtyEntries {
     return $entries.ToArray()
 }
 
+# indexで追跡されている全pathと、作業ツリー上の現在内容を1組のsnapshotにする。
+# `git status`の状態文字列では、開始時点で既にMのfileがさらに変わっても検出できない。
+# path集合とSHA-256を別々に保持し、削除もExists=falseとして内容identityへ含める。
+function Get-WorktreeTrackedSnapshot {
+    param([Parameter(Mandatory = $true)][string]$RepoRoot)
+
+    $trackedText = Get-GitCommandText -RepoRoot $RepoRoot -GitArguments @("ls-files", "-z")
+    $entries = [Collections.Generic.List[object]]::new()
+    foreach ($rawPath in $trackedText.Split([char]0)) {
+        if ([string]::IsNullOrEmpty($rawPath)) { continue }
+        $path = $rawPath.Replace('\', '/')
+        $fullPath = Join-Path $RepoRoot ($path.Replace('/', [IO.Path]::DirectorySeparatorChar))
+        $exists = Test-Path -LiteralPath $fullPath -PathType Leaf
+        $entries.Add([pscustomobject]@{
+                Path = $path
+                Exists = $exists
+                Sha256 = if ($exists) { Get-Sha256HexOfFile $fullPath } else { $null }
+            })
+    }
+    return @($entries.ToArray() | Sort-Object Path)
+}
+
+function Compare-WorktreeTrackedSnapshots {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Before,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$After
+    )
+
+    $beforeByPath = @{}
+    foreach ($entry in $Before) {
+        $path = [string]$entry.Path
+        if ([string]::IsNullOrWhiteSpace($path) -or $beforeByPath.ContainsKey($path)) {
+            throw "追跡snapshotの開始側pathが空または重複しています: $path"
+        }
+        $beforeByPath[$path] = $entry
+    }
+    $afterByPath = @{}
+    foreach ($entry in $After) {
+        $path = [string]$entry.Path
+        if ([string]::IsNullOrWhiteSpace($path) -or $afterByPath.ContainsKey($path)) {
+            throw "追跡snapshotの終了側pathが空または重複しています: $path"
+        }
+        $afterByPath[$path] = $entry
+    }
+
+    $violations = [Collections.Generic.List[string]]::new()
+    foreach ($path in @($beforeByPath.Keys | Sort-Object)) {
+        if (-not $afterByPath.ContainsKey($path)) {
+            $violations.Add("追跡pathが消えました: $path")
+            continue
+        }
+        $beforeEntry = $beforeByPath[$path]
+        $afterEntry = $afterByPath[$path]
+        if ([bool]$beforeEntry.Exists -ne [bool]$afterEntry.Exists) {
+            $violations.Add("追跡fileの存在状態が変わりました: $path")
+        }
+        elseif ([bool]$beforeEntry.Exists -and
+            -not [string]::Equals([string]$beforeEntry.Sha256, [string]$afterEntry.Sha256, [StringComparison]::Ordinal)) {
+            $violations.Add("追跡fileの内容が変わりました: $path")
+        }
+    }
+    foreach ($path in @($afterByPath.Keys | Sort-Object)) {
+        if (-not $beforeByPath.ContainsKey($path)) {
+            $violations.Add("追跡pathが増えました: $path")
+        }
+    }
+    return [pscustomobject]@{
+        IsMatch = ($violations.Count -eq 0)
+        Violations = @($violations.ToArray())
+    }
+}
+
 function Test-PathMatchesAnyPattern {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -191,6 +266,10 @@ function Test-PathMatchesAnyPattern {
         }
     }
     return $false
+}
+
+if ($LoadFunctionsOnly) {
+    return
 }
 
 if ([string]::IsNullOrWhiteSpace($ReceiptPath)) {

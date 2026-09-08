@@ -295,6 +295,10 @@ try {
     Assert-True ($checkerSource.Contains('function Get-RecordIntroductionCommit')) "historical evidence must bind the exact record to its introduction commit"
     Assert-True ($checkerSource.Contains("'--reverse', '--follow', 'HEAD'")) "historical search must be limited to the followed HEAD ancestry"
     Assert-True (-not $checkerSource.Contains('--all')) "historical search must not trust snapshots from non-HEAD refs"
+    Assert-True ($checkerSource.Contains('function Initialize-RecordIntroductionCommitIndex')) "report history must be indexed once per process"
+    Assert-True ($checkerSource.Contains('function Get-RegeneratedRoadmapSnapshotFromBytes')) "historical roadmap regeneration must use one shared memoized function"
+    Assert-True ($checkerSource.Contains('$script:roadmapSnapshotNewlinePolicy')) "snapshot memo key must include the newline policy"
+    Assert-True (-not $checkerSource.Contains('C6_DIAGNOSTIC')) "temporary C6 diagnostics must not remain in production output"
     $attributeLines = [regex]::Split(
         [IO.File]::ReadAllText($attributesPath, (New-Object Text.UTF8Encoding($false, $true))),
         "\r\n|\n|\r"
@@ -826,6 +830,7 @@ try {
         'Get-StrictMachineLinePatterns',
         'Get-RecordContentIdentitySha256',
         'Test-ReportBlobContainsContentIdentityHash',
+        'Initialize-RecordIntroductionCommitIndex',
         'Get-RecordContentIdentityIntroductionCommit',
         'Get-ReportRecordWriteTime'
     )) {
@@ -877,6 +882,7 @@ try {
     $script:recordIntroductionCommits = @{}
     $script:recordContentIdentityIntroductionCommits = @{}
     $script:recordIntroductionCommitInstants = @{}
+    $script:recordIntroductionIndexReady = $false
     $firstRecord = [pscustomobject]@{ Header = $firstHeader; BodyLines = @() }
 
     # checkoutのmtimeがcommitより前/後へ変わってもcleanなrecordは初出commitを使う。
@@ -901,6 +907,7 @@ try {
     $script:recordIntroductionCommits = @{}
     $script:recordContentIdentityIntroductionCommits = @{}
     $script:recordIntroductionCommitInstants = @{}
+    $script:recordIntroductionIndexReady = $false
     $afterLaterAppend = Get-ReportRecordWriteTime -Root $timeRepoRoot -Path $timeReportPath -Record $firstRecord
     Assert-True ($afterLaterAppend.Basis -ceq 'commit') "後日の追記後にcommit基準から外れました"
     Assert-True ($afterLaterAppend.Instant -eq $firstWrite.Instant) "後日の追記が古いrecordの初出時刻を動かしました: before=$($firstWrite.Instant) after=$($afterLaterAppend.Instant)"

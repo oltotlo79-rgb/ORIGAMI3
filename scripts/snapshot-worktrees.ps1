@@ -216,6 +216,7 @@ function Save-Snapshot {
     )
 
     $indexFile = Join-Path ([IO.Path]::GetTempPath()) ("ori3-snapshot-" + [Guid]::NewGuid().ToString("N") + ".index")
+    $pathspecFile = $null
     try {
         Invoke-Git -WorkingDirectory $Worktree -Arguments @("read-tree", "HEAD") -IndexFile $indexFile | Out-Null
         Invoke-Git -WorkingDirectory $Worktree -Arguments @("add", "-A", ".") -IndexFile $indexFile -AllowFailure | Out-Null
@@ -224,7 +225,10 @@ function Save-Snapshot {
         }
         $scratchpadPaths = @(Get-SnapshotScratchpadPaths -Worktree $Worktree)
         if ($scratchpadPaths.Count -gt 0) {
-            Invoke-Git -WorkingDirectory $Worktree -Arguments (@("add", "-f", "--") + $scratchpadPaths) -IndexFile $indexFile | Out-Null
+            $pathspecFile = Join-Path ([IO.Path]::GetTempPath()) ("ori3-snapshot-" + [Guid]::NewGuid().ToString("N") + ".pathspec")
+            $pathspecBytes = [Text.UTF8Encoding]::new($false).GetBytes(($scratchpadPaths -join [char]0) + [char]0)
+            [IO.File]::WriteAllBytes($pathspecFile, $pathspecBytes)
+            Invoke-Git -WorkingDirectory $Worktree -Arguments @("add", "-f", "--pathspec-from-file=$pathspecFile", "--pathspec-file-nul") -IndexFile $indexFile | Out-Null
         }
         $tree = (Invoke-Git -WorkingDirectory $Worktree -Arguments @("write-tree") -IndexFile $indexFile) -join ""
         if ($tree -notmatch "^[0-9a-f]{40}$") { throw "write-tree did not return a tree id: $tree" }
@@ -251,6 +255,7 @@ function Save-Snapshot {
     }
     finally {
         if (Test-Path -LiteralPath $indexFile) { Remove-Item -LiteralPath $indexFile -Force }
+        if ($null -ne $pathspecFile -and (Test-Path -LiteralPath $pathspecFile)) { Remove-Item -LiteralPath $pathspecFile -Force }
     }
 }
 

@@ -88,6 +88,7 @@ $script:AskUserQuestionQuoteAuthorities = @(
 $script:AskUserQuestionOpenQuote = [char]0x300C
 $script:AskUserQuestionCloseQuote = [char]0x300D
 $script:AskUserQuestionPayloadFormatLabel = "payload " + (-join [char[]]@(0x306E, 0x5F62, 0x5F0F))
+$script:CoordinatorReportLogRelativePath = "docs/" + (-join [char[]]@(0x5831, 0x544A, 0x8A18, 0x9332)) + ".md"
 $script:Mutex = $null
 $script:MutexHeld = $false
 $script:BoundaryScriptPath = [IO.Path]::GetFullPath([string]$MyInvocation.MyCommand.Path)
@@ -498,6 +499,86 @@ function New-PolicyDecision {
         PipelineSource = $PipelineSource
         PipelineTransform = $PipelineTransform
     }
+}
+
+function Get-DirectEditDenialReason {
+    param([Parameter(Mandatory = $true)][string]$Detail)
+
+    return (
+        "ORIGAMI3_COORDINATOR_BOUNDARY_DENY: direct-edit boundary: $Detail " +
+        "Allowed direct-edit paths: $($script:CoordinatorReportLogRelativePath); scratchpad/**; " +
+        ".claude/settings.local.json; paths outside the repository. " +
+        "Delegate implementation and source/document changes to a worker."
+    )
+}
+
+function Test-PathHasReparsePoint {
+    param([Parameter(Mandatory = $true)][string]$FullPath)
+
+    $rootPart = [IO.Path]::GetPathRoot($FullPath)
+    if ([string]::IsNullOrWhiteSpace($rootPart)) { return $true }
+    $current = $rootPart
+    $remainder = $FullPath.Substring($rootPart.Length)
+    foreach ($segment in @($remainder -split '[\\/]' | Where-Object { $_.Length -gt 0 })) {
+        $current = Join-Path $current $segment
+        if (-not (Test-Path -LiteralPath $current)) { continue }
+        $item = Get-Item -LiteralPath $current -Force -ErrorAction Stop
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-CoordinatorDirectEdit {
+    param(
+        [Parameter(Mandatory = $true)][string]$ToolName,
+        [AllowNull()]$ToolInput,
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot
+    )
+
+    $pathField = if ($ToolName -eq "NotebookEdit") { "notebook_path" } else { "file_path" }
+    $pathValue = Get-ObjectPropertyValue $ToolInput $pathField
+    if ($pathValue -isnot [string] -or [string]::IsNullOrWhiteSpace([string]$pathValue)) {
+        return New-PolicyDecision $false "direct-edit" "tool_input.$pathField is missing or is not a nonempty string"
+    }
+    $rawPath = [string]$pathValue
+    if (-not [IO.Path]::IsPathRooted($rawPath)) {
+        return New-PolicyDecision $false "direct-edit" "tool_input.$pathField must be an absolute literal path"
+    }
+    if ($rawPath -match '(^|[\\/])\.\.([\\/]|$)') {
+        return New-PolicyDecision $false "direct-edit" "tool_input.$pathField must not contain a parent traversal segment"
+    }
+
+    try {
+        $fullPath = [IO.Path]::GetFullPath($rawPath).TrimEnd([char[]]"\/")
+        $fullRoot = [IO.Path]::GetFullPath($RepositoryRoot).TrimEnd([char[]]"\/")
+    }
+    catch {
+        return New-PolicyDecision $false "direct-edit" ("tool_input.$pathField is not a valid filesystem path: " + $_.Exception.Message)
+    }
+    if (Test-PathHasReparsePoint -FullPath $fullPath) {
+        return New-PolicyDecision $false "direct-edit" "tool_input.$pathField crosses a symbolic link or reparse point"
+    }
+
+    $rootPrefix = $fullRoot + [IO.Path]::DirectorySeparatorChar
+    $insideRepository = [string]::Equals($fullPath, $fullRoot, [StringComparison]::OrdinalIgnoreCase) -or
+        $fullPath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)
+    if (-not $insideRepository) {
+        return New-PolicyDecision $true "direct-edit" "path is outside the repository"
+    }
+    if ([string]::Equals($fullPath, (Join-Path $fullRoot ($script:CoordinatorReportLogRelativePath.Replace('/', [IO.Path]::DirectorySeparatorChar))), [StringComparison]::OrdinalIgnoreCase)) {
+        return New-PolicyDecision $true "direct-edit" "report log is coordinator-owned"
+    }
+    if ([string]::Equals($fullPath, (Join-Path $fullRoot ".claude\settings.local.json"), [StringComparison]::OrdinalIgnoreCase)) {
+        return New-PolicyDecision $true "direct-edit" "local coordinator setting is coordinator-owned"
+    }
+    $scratchpadRoot = Join-Path $fullRoot "scratchpad"
+    $scratchpadPrefix = $scratchpadRoot.TrimEnd([char[]]"\/") + [IO.Path]::DirectorySeparatorChar
+    if ($fullPath.StartsWith($scratchpadPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        return New-PolicyDecision $true "direct-edit" "scratchpad path is coordinator-owned"
+    }
+    return New-PolicyDecision $false "direct-edit" "main-thread direct edit is outside the coordinator-owned path allowlist"
 }
 
 function Resolve-PolicyPath {
@@ -2194,6 +2275,21 @@ try {
             }
         }
         exit 0
+    }
+
+    if ($toolName -in @("Write", "Edit", "NotebookEdit")) {
+        if ($eventName -ne "PreToolUse") { exit 0 }
+        $repositoryRoot = Get-RepositoryRootFromPayload $payload
+        $toolInput = Get-ObjectPropertyValue $payload "tool_input"
+        $decision = Test-CoordinatorDirectEdit -ToolName $toolName -ToolInput $toolInput -RepositoryRoot $repositoryRoot
+        if ($decision.Allowed) { exit 0 }
+        if ([string]::IsNullOrWhiteSpace($StateRoot)) { $StateRoot = [IO.Path]::GetTempPath() }
+        $paths = Get-StatePaths -RepositoryRoot $repositoryRoot -Root $StateRoot
+        Enter-StateLock -RepositoryKey $paths.RepositoryKey
+        $toolUseId = [string](Get-ObjectPropertyValue $payload "tool_use_id")
+        $directEditHash = Get-Sha256Hex ("$toolName`n$rawInput")
+        Write-AuditEvent -Paths $paths -Event "direct-edit-deny" -ToolName $toolName -CommandHash $directEditHash -ToolUseId $toolUseId -Detail ([string]$decision.Reason)
+        Write-PreToolDeny (Get-DirectEditDenialReason -Detail ([string]$decision.Reason))
     }
 
     if ($toolName -notin @("PowerShell", "Bash")) {

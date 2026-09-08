@@ -1,0 +1,88 @@
+#!/bin/sh
+# ORIGAMI3 commit message gate.
+
+message_path=$1
+if [ -z "$message_path" ] || [ ! -f "$message_path" ]; then
+    printf '%s\n' '[NG] コミットメッセージファイルを読み取れません。' >&2
+    exit 2
+fi
+
+hook_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repo_root=$(git -C "$hook_dir" rev-parse --show-toplevel 2>/dev/null)
+if [ -z "$repo_root" ]; then
+    printf '%s\n' '[NG] commit-msg hookからリポジトリルートを解決できません。' >&2
+    exit 2
+fi
+approval_script="$hook_dir/checks/cargo-manifest-approval.ps1"
+
+powershell_command=
+if command -v powershell.exe >/dev/null 2>&1; then
+    powershell_command=powershell.exe
+elif command -v pwsh >/dev/null 2>&1; then
+    powershell_command=pwsh
+elif command -v powershell >/dev/null 2>&1; then
+    powershell_command=powershell
+fi
+if [ -z "$powershell_command" ] || [ ! -f "$approval_script" ]; then
+    printf '%s\n' '[NG] manifest/vendor承認関門を実行できません。PowerShellとcargo-manifest-approval.ps1を確認してください。' >&2
+    exit 2
+fi
+
+staged=$(git -C "$repo_root" -c core.quotePath=false diff --cached --name-only --diff-filter=ACMR)
+status=$?
+if [ "$status" -ne 0 ]; then
+    printf '%s\n' '[NG] staged pathを取得できないためコミット文を検査できません。' >&2
+    exit "$status"
+fi
+approval_path=
+while IFS= read -r staged_path; do
+    case "$staged_path" in
+        Cargo.toml|Cargo.lock|*/Cargo.toml|*/Cargo.lock|vendor|vendor/*)
+            approval_path=$staged_path
+            break
+            ;;
+    esac
+done <<EOF
+$staged
+EOF
+
+if [ -n "$approval_path" ]; then
+    "$powershell_command" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$approval_script" -CommitMessagePath "$message_path" "$approval_path"
+else
+    "$powershell_command" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$approval_script" -CommitMessagePath "$message_path"
+fi
+status=$?
+if [ "$status" -ne 0 ]; then
+    printf '%s\n' '[NG] Cargo.toml / Cargo.lock / vendor/ の変更にはコミット本文の「承認:」行が必要です。' >&2
+    exit "$status"
+fi
+
+subject=$(sed -n '1{s/\r$//;p;q;}' "$message_path")
+if printf '%s\n' "$subject" | grep -Eiq '^[[:space:]]*(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^)]*\))?!?:[[:space:]]*'; then
+    printf '%s\n' '[NG] コミット件名に feat: / fix: 等のプレフィックスは使えません（規約 §6）。' >&2
+    exit 1
+fi
+
+if ! tail -n +2 "$message_path" | sed '/^[[:space:]]*#/d;/^Co-Authored-By:/d' | grep -Eq '[ぁ-んァ-ヶ一-龠々〆ヵヶ]'; then
+    printf '%s\n' '[NG] コミットメッセージ本文に、変更内容と可能になったことを説明する日本語が必要です（規約 §6）。' >&2
+    exit 1
+fi
+
+trailer_block=$(sed 's/\r$//' "$message_path" | sed '/^[[:space:]]*#/d;/^[[:space:]]*$/d' | awk '
+    { lines[++count] = $0 }
+    END {
+        for (i = count; i >= 1; i--) {
+            if (lines[i] ~ /^[A-Za-z][A-Za-z0-9-]*: .+$/) {
+                print lines[i]
+            } else {
+                break
+            }
+        }
+    }')
+if ! printf '%s\n' "$trailer_block" | grep -Eq '^Co-Authored-By: .+ <[^ <>]+@[^ <>]+>$'; then
+    printf '%s\n' '[NG] コミットメッセージ末尾のtrailer群に Co-Authored-By: 名前 <メール> の署名行が必要です（規約 §6）。' >&2
+    exit 1
+fi
+
+printf '%s\n' '[OK] コミットメッセージの日本語本文・禁止プレフィックス・末尾署名を確認しました。'
+exit 0

@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   release-windows:
@@ -27,6 +28,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          fetch-depth: 0
 
       - name: Validate release version
         id: meta
@@ -52,10 +54,31 @@ jobs:
           $packageLockText = Get-Content -LiteralPath "apps/desktop/package-lock.json" -Raw
           $cargoToml = Get-Content -LiteralPath "Cargo.toml" -Raw
 
-          $packageLockVersionMatch = [regex]::Match(
+          # Windows PowerShell 5.1でも同じ5か所を読めるよう、手元の
+          # Get-PackageLockVersions と同じく packages[""] のキーだけ一時置換する。
+          $emptyKeyPattern = [regex]'(?m)^(?<indent>[ \t]*)""[ \t]*:'
+          if ($emptyKeyPattern.Matches($packageLockText).Count -ne 1) {
+            throw 'package-lock.json の packages[""] を1つに特定できません。'
+          }
+          $normalizedPackageLock = $emptyKeyPattern.Replace(
             $packageLockText,
-            '(?m)^\s*"version"\s*:\s*"(?<version>[^"]+)"'
+            '${indent}"__release_check_workspace__":',
+            1
           )
+          $packageLock = $normalizedPackageLock | ConvertFrom-Json
+          $packageLockRootProperty = $packageLock.PSObject.Properties["version"]
+          $packageLockPackagesProperty = $packageLock.PSObject.Properties["packages"]
+          if ($null -eq $packageLockRootProperty -or $null -eq $packageLockPackagesProperty) {
+            throw "package-lock.json のルート version または packages を取得できません。"
+          }
+          $packageLockWorkspaceProperty = $packageLockPackagesProperty.Value.PSObject.Properties["__release_check_workspace__"]
+          if ($null -eq $packageLockWorkspaceProperty) {
+            throw 'package-lock.json の packages[""] を取得できません。'
+          }
+          $packageLockWorkspaceVersionProperty = $packageLockWorkspaceProperty.Value.PSObject.Properties["version"]
+          if ($null -eq $packageLockWorkspaceVersionProperty) {
+            throw 'package-lock.json の packages[""].version を取得できません。'
+          }
           $workspacePackage = [regex]::Match(
             $cargoToml,
             '(?ms)^\[workspace\.package\]\s*(?<body>.*?)(?=^\[|\z)'
@@ -67,10 +90,8 @@ jobs:
           if (-not $workspacePackage.Success -or -not $cargoVersionMatch.Success) {
             throw "Cargo.toml から workspace.package.version を取得できません。"
           }
-          if (-not $packageLockVersionMatch.Success) {
-            throw "package-lock.json から version を取得できません。"
-          }
-          $packageLockVersion = $packageLockVersionMatch.Groups['version'].Value
+          $packageLockRootVersion = [string]$packageLockRootProperty.Value
+          $packageLockWorkspaceVersion = [string]$packageLockWorkspaceVersionProperty.Value
           $cargoVersion = $cargoVersionMatch.Groups['version'].Value
 
           if ([string]$tauriConfig.version -ne $version) {
@@ -79,8 +100,11 @@ jobs:
           if ([string]$package.version -ne $version) {
             throw "タグ $tag と package.json の version $($package.version) が一致しません。"
           }
-          if ($packageLockVersion -ne $version) {
-            throw "タグ $tag と package-lock.json の version $packageLockVersion が一致しません。"
+          if ($packageLockRootVersion -ne $version) {
+            throw "タグ $tag と package-lock.json ルートの version $packageLockRootVersion が一致しません。"
+          }
+          if ($packageLockWorkspaceVersion -ne $version) {
+            throw ('タグ {0} と package-lock.json packages[""].version {1} が一致しません。' -f $tag, $packageLockWorkspaceVersion)
           }
           if ($cargoVersion -ne $version) {
             throw "タグ $tag と Cargo.toml の version $cargoVersion が一致しません。"
@@ -89,6 +113,19 @@ jobs:
           "tag=$tag" >> $env:GITHUB_OUTPUT
           "version=$version" >> $env:GITHUB_OUTPUT
           "prerelease=$($version.Split('+')[0].Contains('-').ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+
+      - name: Run pre-publication release readiness gate
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File scripts\check-release-ready.ps1 `
+            -Tag $env:RELEASE_TAG
+          if ($LASTEXITCODE -ne 0) {
+            throw "公開前関門の6段が合格しませんでした。組み立てと公開を中止します。"
+          }
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -175,7 +212,7 @@ jobs:
 
           Get-ChildItem -LiteralPath $outputDir -File | Select-Object Name, Length
 
-      - name: Prepare component lists and download verification records
+      - name: Prepare component lists and verify release artifacts locally
         id: publication_files
         shell: pwsh
         env:
@@ -189,41 +226,55 @@ jobs:
           $msiName = "ORIGAMI3_{0}_x64.msi" -f $version
           $portableName = "ORIGAMI3_{0}_portable.exe" -f $version
           $manualSource = Join-Path $env:GITHUB_WORKSPACE "docs\manual\ORIGAMI3取扱説明書.pdf"
+          $manualPath = Join-Path $outputDir "ORIGAMI3.pdf"
           $publishedNames = @($setupName, $msiName, $portableName, "ORIGAMI3.pdf")
           $statusName = "ORIGAMI3_{0}_component-list-status.json" -f $version
           $statusPath = Join-Path $outputDir $statusName
-          $recordsState = "unavailable"
-          $summaryMessage = "配布物の中身の一覧と照合用ファイルを作成できませんでした。通常の配布物4件だけを公開します。"
-          $technicalFailure = $null
+          $manifestPath = Join-Path $outputDir ("ORIGAMI3_{0}_SHA256SUMS.txt" -f $version)
+          $recordPath = Join-Path $outputDir ("ORIGAMI3_{0}_artifact-record.json" -f $version)
+          $localResultPath = Join-Path $outputDir ("ORIGAMI3_{0}_prepublication-verification-result.json" -f $version)
 
-          try {
+          if (-not (Test-Path -LiteralPath $manualSource -PathType Leaf)) {
+            throw "説明書PDFが見つかりません: $manualSource"
+          }
+          Copy-Item -LiteralPath $manualSource -Destination $manualPath -Force
+
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File scripts\supply-chain-generate-release-hashes.ps1 `
+            -Version $version `
+            -BuildId $buildId `
+            -SetupPath (Join-Path $outputDir $setupName) `
+            -MsiPath (Join-Path $outputDir $msiName) `
+            -PortablePath (Join-Path $outputDir $portableName) `
+            -ManualPath $manualPath `
+            -DestinationDirectory $outputDir
+          if ($LASTEXITCODE -ne 0) { throw "Hash record generator exited with $LASTEXITCODE." }
+
+          foreach ($artifactName in $publishedNames) {
+            $inventoryPath = Join-Path $outputDir ("{0}.components.cdx.json" -f $artifactName)
             & powershell.exe -NoProfile -ExecutionPolicy Bypass `
-              -File scripts\supply-chain-generate-release-hashes.ps1 `
-              -Version $version `
-              -BuildId $buildId `
-              -SetupPath (Join-Path $outputDir $setupName) `
-              -MsiPath (Join-Path $outputDir $msiName) `
-              -PortablePath (Join-Path $outputDir $portableName) `
-              -ManualPath $manualSource `
-              -DestinationDirectory $outputDir
-            if ($LASTEXITCODE -ne 0) { throw "Hash record generator exited with $LASTEXITCODE." }
-
-            foreach ($artifactName in $publishedNames) {
-              $inventoryPath = Join-Path $outputDir ("{0}.components.cdx.json" -f $artifactName)
-              & powershell.exe -NoProfile -ExecutionPolicy Bypass `
-                -File scripts\supply-chain-generate-sbom.ps1 `
-                -DestinationPath $inventoryPath `
-                -ArtifactName $artifactName `
-                -BuildId $buildId
-              if ($LASTEXITCODE -ne 0) { throw "Component list generator failed for $artifactName with $LASTEXITCODE." }
+              -File scripts\supply-chain-generate-sbom.ps1 `
+              -DestinationPath $inventoryPath `
+              -ArtifactName $artifactName `
+              -BuildId $buildId
+            if ($LASTEXITCODE -ne 0) { throw "Component list generator failed for $artifactName with $LASTEXITCODE." }
+            if (-not (Test-Path -LiteralPath $inventoryPath -PathType Leaf)) {
+              throw "Component list generator did not create $inventoryPath."
             }
+          }
 
-            $recordsState = "complete"
-            $summaryMessage = "配布物4件それぞれの中身の一覧と照合用ファイルを作成しました。"
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File scripts\supply-chain-verify-release-hashes.ps1 `
+            -ManifestPath $manifestPath `
+            -DownloadedDirectory $outputDir `
+            -RecordPath $recordPath `
+            -ResultPath $localResultPath
+          if ($LASTEXITCODE -ne 0) {
+            throw "公開前の配布物4件が、作成したハッシュ記録と一致しませんでした。"
           }
-          catch {
-            $technicalFailure = $_.Exception.Message
-          }
+
+          $recordsState = "complete"
+          $summaryMessage = "配布物4件のhash・部品一覧を作成し、公開前のローカル照合に合格しました。"
 
           $status = [ordered]@{
             schema = 1
@@ -231,9 +282,9 @@ jobs:
             buildId = $buildId
             state = $recordsState
             message = $summaryMessage
-            componentListCount = if ($recordsState -eq "complete") { 4 } else { 0 }
-            hashSidecarCount = if ($recordsState -eq "complete") { 4 } else { 0 }
-            failureRecordedIn = if ($recordsState -eq "complete") { $null } else { "GitHub Actionsの実行記録と要約" }
+            componentListCount = 4
+            hashSidecarCount = 4
+            localVerification = [IO.Path]::GetFileName($localResultPath)
           }
           [IO.File]::WriteAllText(
             $statusPath,
@@ -245,17 +296,17 @@ jobs:
             "release-artifacts/$setupName",
             "release-artifacts/$msiName",
             "release-artifacts/$portableName",
-            "docs/manual/ORIGAMI3取扱説明書.pdf",
-            "release-artifacts/$statusName"
+            "release-artifacts/ORIGAMI3.pdf",
+            "release-artifacts/$statusName",
+            "release-artifacts/ORIGAMI3_${version}_prepublication-verification-result.json",
+            "release-artifacts/ORIGAMI3_${version}_release-receipt.json"
           )
-          if ($recordsState -eq "complete") {
-            foreach ($artifactName in $publishedNames) {
-              $releaseFiles += "release-artifacts/$artifactName.components.cdx.json"
-              $releaseFiles += "release-artifacts/$artifactName.sha256"
-            }
-            $releaseFiles += "release-artifacts/ORIGAMI3_${version}_SHA256SUMS.txt"
-            $releaseFiles += "release-artifacts/ORIGAMI3_${version}_artifact-record.json"
+          foreach ($artifactName in $publishedNames) {
+            $releaseFiles += "release-artifacts/$artifactName.components.cdx.json"
+            $releaseFiles += "release-artifacts/$artifactName.sha256"
           }
+          $releaseFiles += "release-artifacts/ORIGAMI3_${version}_SHA256SUMS.txt"
+          $releaseFiles += "release-artifacts/ORIGAMI3_${version}_artifact-record.json"
 
           $delimiter = "ORI3_RELEASE_FILES_" + [guid]::NewGuid().ToString("N")
           "files<<$delimiter" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -266,11 +317,159 @@ jobs:
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "## 配布物に添える確認記録"
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- 状態: $recordsState"
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- $summaryMessage"
-          if ($null -ne $technicalFailure) {
-            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- 詳細: $technicalFailure"
+
+      - name: Verify same-SHA checks and create release receipt
+        id: release_receipt
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          RECORDS_STATE: ${{ steps.publication_files.outputs.component_records_state }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:RECORDS_STATE -ne "complete") {
+            throw "公開前のhash・部品一覧・ローカル照合が揃っていません。"
+          }
+          if ([string]$env:GITHUB_RUN_ID -notmatch '^\d+$' -or [string]$env:GITHUB_RUN_ATTEMPT -notmatch '^\d+$' -or [string]$env:GITHUB_SHA -notmatch '^[0-9a-f]{40}$') {
+            throw "release runのid・attempt・SHAを取得できません。"
           }
 
+          $headSha = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $headSha -notmatch '^[0-9a-f]{40}$') {
+            throw "checkoutしたHEADのSHAを取得できません。"
+          }
+          $tagSha = (& git rev-list -n 1 $env:TAG).Trim()
+          if ($LASTEXITCODE -ne 0 -or $tagSha -notmatch '^[0-9a-f]{40}$') {
+            throw "タグ $env:TAG のSHAを取得できません。"
+          }
+          if ($headSha -cne $env:GITHUB_SHA -or $tagSha -cne $env:GITHUB_SHA) {
+            throw "タグ・checkout HEAD・GitHub runのSHAが一致しません: tag=$tagSha HEAD=$headSha run=$env:GITHUB_SHA"
+          }
+
+          $runsJson = @(& gh api "repos/$env:GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$env:GITHUB_SHA&per_page=100")
+          if ($LASTEXITCODE -ne 0) { throw "同じSHAのci.yml実行を取得できませんでした。" }
+          $runs = ($runsJson -join "`n") | ConvertFrom-Json
+          # ci.ymlのchecks jobが実行対象となるpush/PRだけを候補にし、同じSHAの最新runを選ぶ。
+          # schedule/workflow_dispatchではchecksがskipされるため、成功証拠として扱わない。
+          $ciRun = @($runs.workflow_runs | Where-Object {
+            [string]$_.head_sha -ceq $env:GITHUB_SHA -and [string]$_.event -in @("push", "pull_request")
+          } | Sort-Object -Property id -Descending | Select-Object -First 1)
+          if ($ciRun.Count -ne 1) {
+            throw "同じSHAのci.yml実行を1件に特定できません。"
+          }
+          if ([string]$ciRun[0].status -cne "completed" -or [string]$ciRun[0].conclusion -cne "success") {
+            throw "同じSHAの最新ci.yml実行がsuccessではありません: id=$($ciRun[0].id) status=$($ciRun[0].status) conclusion=$($ciRun[0].conclusion)"
+          }
+
+          $jobsJson = @(& gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$($ciRun[0].id)/jobs?per_page=100")
+          if ($LASTEXITCODE -ne 0) { throw "同じSHAのci.yml実行からchecks jobを取得できませんでした。" }
+          $jobs = ($jobsJson -join "`n") | ConvertFrom-Json
+          $checksJob = @($jobs.jobs | Where-Object { [string]$_.name -ceq "Tests, lint, and desktop checks" })
+          if ($checksJob.Count -ne 1 -or [string]$checksJob[0].conclusion -cne "success") {
+            throw "同じSHAのchecks jobがsuccessではありません。"
+          }
+          if ([string]$ciRun[0].id -notmatch '^\d+$' -or [string]$ciRun[0].run_attempt -notmatch '^\d+$' -or [string]$checksJob[0].id -notmatch '^\d+$') {
+            throw "CI runまたはchecks jobのid・attemptを証拠として取得できません。"
+          }
+
+          $outputDir = Join-Path $env:GITHUB_WORKSPACE "release-artifacts"
+          $recordPath = Join-Path $outputDir ("ORIGAMI3_{0}_artifact-record.json" -f $env:VERSION)
+          $artifactRecord = Get-Content -LiteralPath $recordPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ([int]$artifactRecord.schema -ne 1 -or [string]$artifactRecord.version -cne $env:VERSION -or [string]$artifactRecord.buildId -cne [string]$env:GITHUB_RUN_ID) {
+            throw "hash記録がこの版・このrelease runで作成された証拠になっていません。"
+          }
+          $artifactHashes = @($artifactRecord.artifacts | ForEach-Object {
+            [ordered]@{ name = [string]$_.artifactName; sha256 = [string]$_.sha256 }
+          })
+          if ($artifactHashes.Count -ne 4 -or @($artifactHashes.name | Sort-Object -Unique).Count -ne 4) {
+            throw "receiptへ記録する配布物hashが4件ではありません。"
+          }
+          $componentListHashes = @($artifactHashes.name | Sort-Object | ForEach-Object {
+            $name = "{0}.components.cdx.json" -f $_
+            $path = Join-Path $outputDir $name
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "receiptへ記録する部品一覧がありません: $name"
+            }
+            [ordered]@{ name = $name; sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() }
+          })
+
+          $tauriVersion = [string](Get-Content -LiteralPath "apps/desktop/src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json).version
+          $packageVersion = [string](Get-Content -LiteralPath "apps/desktop/package.json" -Raw | ConvertFrom-Json).version
+          $packageLockText = Get-Content -LiteralPath "apps/desktop/package-lock.json" -Raw
+          $emptyKeyPattern = [regex]'(?m)^(?<indent>[ \t]*)""[ \t]*:'
+          if ($emptyKeyPattern.Matches($packageLockText).Count -ne 1) { throw 'packages[""] を1つに特定できません。' }
+          $normalizedPackageLock = $emptyKeyPattern.Replace($packageLockText, '${indent}"__release_check_workspace__":', 1)
+          $packageLock = $normalizedPackageLock | ConvertFrom-Json
+          $packageLockRootVersion = [string]$packageLock.PSObject.Properties["version"].Value
+          $packageLockWorkspaceVersion = [string]$packageLock.PSObject.Properties["packages"].Value.PSObject.Properties["__release_check_workspace__"].Value.PSObject.Properties["version"].Value
+          $cargoToml = Get-Content -LiteralPath "Cargo.toml" -Raw
+          $workspacePackage = [regex]::Match($cargoToml, '(?ms)^\[workspace\.package\]\s*(?<body>.*?)(?=^\[|\z)')
+          $cargoVersionMatch = [regex]::Match($workspacePackage.Groups['body'].Value, '(?m)^version\s*=\s*"(?<version>[^"]+)"')
+          if (-not $workspacePackage.Success -or -not $cargoVersionMatch.Success) { throw "Cargo.tomlの版を取得できません。" }
+          $cargoVersion = $cargoVersionMatch.Groups['version'].Value
+          $versionValues = @($tauriVersion, $packageVersion, $packageLockRootVersion, $packageLockWorkspaceVersion, $cargoVersion)
+          if ($versionValues.Count -ne 5 -or @($versionValues | Sort-Object -Unique).Count -ne 1 -or $versionValues[0] -cne $env:VERSION) {
+            throw "receiptへ記録する版5値が一致しません。"
+          }
+
+          $manualHash = @($artifactHashes | Where-Object { $_.name -ceq "ORIGAMI3.pdf" })
+          if ($manualHash.Count -ne 1) { throw "説明書PDFのhashを1件に特定できません。" }
+          $manifestPath = Join-Path $outputDir ("ORIGAMI3_{0}_SHA256SUMS.txt" -f $env:VERSION)
+          $localResultPath = Join-Path $outputDir ("ORIGAMI3_{0}_prepublication-verification-result.json" -f $env:VERSION)
+          $evidencePaths = @($manifestPath, $recordPath, $localResultPath)
+          $evidenceFiles = @($evidencePaths | ForEach-Object {
+            if (-not (Test-Path -LiteralPath $_ -PathType Leaf)) { throw "公開前の証拠ファイルがありません: $_" }
+            [ordered]@{ name = [IO.Path]::GetFileName($_); sha256 = (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash.ToLowerInvariant() }
+          })
+          if ($evidenceFiles.Count -ne 3) { throw "receiptへ記録する公開前証拠が3件ではありません。" }
+          $receipt = [ordered]@{
+            schemaVersion = 1
+            tag = $env:TAG
+            version = $env:VERSION
+            githubRunId = [string]$env:GITHUB_RUN_ID
+            githubRunAttempt = [string]$env:GITHUB_RUN_ATTEMPT
+            githubSha = $env:GITHUB_SHA
+            ciRun = [ordered]@{
+              workflow = "ci.yml"
+              runId = [string]$ciRun[0].id
+              runAttempt = [string]$ciRun[0].run_attempt
+              sha = [string]$ciRun[0].head_sha
+              conclusion = [string]$ciRun[0].conclusion
+              event = [string]$ciRun[0].event
+              url = [string]$ciRun[0].html_url
+              checksJobId = [string]$checksJob[0].id
+              checksJobName = [string]$checksJob[0].name
+              checksConclusion = [string]$checksJob[0].conclusion
+            }
+            versions = [ordered]@{
+              tauriConfig = $tauriVersion
+              package = $packageVersion
+              packageLockRoot = $packageLockRootVersion
+              packageLockWorkspace = $packageLockWorkspaceVersion
+              cargoWorkspace = $cargoVersion
+            }
+            artifacts = $artifactHashes
+            componentLists = $componentListHashes
+            manual = [ordered]@{ name = "ORIGAMI3.pdf"; sha256 = $manualHash[0].sha256 }
+            evidenceFiles = $evidenceFiles
+            signing = [ordered]@{
+              signed = $false
+              reason = "利用者の決定により署名なしで配布する。"
+              references = @("docs/progress.md:60", "docs/progress.md:63")
+            }
+          }
+          $receiptPath = Join-Path $outputDir ("ORIGAMI3_{0}_release-receipt.json" -f $env:VERSION)
+          [IO.File]::WriteAllText($receiptPath, ($receipt | ConvertTo-Json -Depth 8) + "`n", [Text.UTF8Encoding]::new($false))
+          $writtenReceipt = Get-Content -LiteralPath $receiptPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ([string]$writtenReceipt.githubSha -cne $env:GITHUB_SHA -or [string]$writtenReceipt.ciRun.sha -cne $env:GITHUB_SHA -or [string]$writtenReceipt.ciRun.conclusion -cne "success" -or -not ($writtenReceipt.signing.signed -eq $false)) {
+            throw "release receiptの再読込検査に失敗しました。"
+          }
+          "receipt_state=complete" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- release receipt: $([IO.Path]::GetFileName($receiptPath)) (same-SHA CI run $($ciRun[0].id), checks success)"
+
       - name: Publish GitHub Release
+        if: ${{ steps.publication_files.outputs.component_records_state == 'complete' && steps.release_receipt.outputs.receipt_state == 'complete' }}
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}

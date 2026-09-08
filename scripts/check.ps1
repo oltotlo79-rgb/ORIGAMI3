@@ -28,6 +28,7 @@ if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
 }
 $root = [IO.Path]::GetFullPath($RepositoryRoot).TrimEnd([char[]]"\\/")
 $receiptHelper = Join-Path $scriptDirectory "check-receipt.ps1"
+$worktreeBoundaryHelper = Join-Path $scriptDirectory "check-worktree-boundary.ps1"
 $hookChecksRunner = Join-Path $scriptDirectory "hooks\checks\run-hook-checks.ps1"
 $powerShellPath = (Get-Process -Id $PID).Path
 $receiptAvailable = $false
@@ -57,6 +58,15 @@ try {
 }
 catch {
     Write-Host "[WARN] receipt判定を使えないため、従来どおり全5検査を実行します: $($_.Exception.Message)" -ForegroundColor Yellow
+}
+
+if (-not (Test-Path -LiteralPath $worktreeBoundaryHelper -PathType Leaf)) {
+    throw "追跡内容guardが見つかりません: $worktreeBoundaryHelper"
+}
+. $worktreeBoundaryHelper -LoadFunctionsOnly
+if ($null -eq (Get-Command Get-WorktreeTrackedSnapshot -CommandType Function -ErrorAction SilentlyContinue) -or
+    $null -eq (Get-Command Compare-WorktreeTrackedSnapshots -CommandType Function -ErrorAction SilentlyContinue)) {
+    throw "追跡内容guardの共通関数を読み込めません: $worktreeBoundaryHelper"
 }
 
 # receipt helperを引数の正本として使う場合も、失敗したtest targetの後ろを
@@ -101,6 +111,7 @@ try {
     $global:LASTEXITCODE = 0
     $beforeTracked = (& git -C $root status --porcelain --untracked-files=no) -join "`n"
     $beforeTrackedStatus = $LASTEXITCODE
+    $beforeTrackedContent = @(Get-WorktreeTrackedSnapshot -RepoRoot $root)
 
     # Source-policy checks are content-sensitive and must run on every call,
     # including when the five build/test checks can reuse a receipt.
@@ -122,9 +133,12 @@ try {
                 $global:LASTEXITCODE = 0
                 $afterReceiptProbeTracked = (& git -C $root status --porcelain --untracked-files=no) -join "`n"
                 $afterReceiptProbeStatus = $LASTEXITCODE
+                $afterReceiptProbeContent = @(Get-WorktreeTrackedSnapshot -RepoRoot $root)
+                $receiptContentComparison = Compare-WorktreeTrackedSnapshots -Before $beforeTrackedContent -After $afterReceiptProbeContent
                 if ($fullConfirmation.EligibilitySha256 -eq $fullReceiptContext.EligibilitySha256 -and
                     $beforeTrackedStatus -eq 0 -and $afterReceiptProbeStatus -eq 0 -and
-                    $afterReceiptProbeTracked -eq $beforeTracked) {
+                    $afterReceiptProbeTracked -eq $beforeTracked -and
+                    $receiptContentComparison.IsMatch) {
                     Write-Ori3ReceiptReuseMessage "手元の全5検査" $fullHit
                     $reuseAllChecks = $true
                 }
@@ -133,6 +147,7 @@ try {
                     $fullReceiptContext = $fullConfirmation
                     $beforeTracked = $afterReceiptProbeTracked
                     $beforeTrackedStatus = $afterReceiptProbeStatus
+                    $beforeTrackedContent = $afterReceiptProbeContent
                 }
             }
             else {
@@ -164,9 +179,12 @@ try {
                     $global:LASTEXITCODE = 0
                     $afterRustProbeTracked = (& git -C $root status --porcelain --untracked-files=no) -join "`n"
                     $afterRustProbeStatus = $LASTEXITCODE
+                    $afterRustProbeContent = @(Get-WorktreeTrackedSnapshot -RepoRoot $root)
+                    $rustReceiptContentComparison = Compare-WorktreeTrackedSnapshots -Before $beforeTrackedContent -After $afterRustProbeContent
                     if ($rustConfirmation.EligibilitySha256 -eq $rustReceiptContext.EligibilitySha256 -and
                         $beforeTrackedStatus -eq 0 -and $afterRustProbeStatus -eq 0 -and
-                        $afterRustProbeTracked -eq $beforeTracked) {
+                        $afterRustProbeTracked -eq $beforeTracked -and
+                        $rustReceiptContentComparison.IsMatch) {
                         Write-Ori3ReceiptReuseMessage "(1/5) Rust W4" $rustHit
                         $reuseRustW4 = $true
                         $rustReceiptForComposition = $rustHit.Receipt
@@ -177,6 +195,7 @@ try {
                         $rustReceiptContext = $rustConfirmation
                         $beforeTracked = $afterRustProbeTracked
                         $beforeTrackedStatus = $afterRustProbeStatus
+                        $beforeTrackedContent = $afterRustProbeContent
                         try {
                             $fullReceiptContext = New-Ori3ReceiptContext "check-all" $root $rustConfirmation.Content
                         }
@@ -196,12 +215,29 @@ try {
         }
 
         if (-not $reuseRustW4) {
+            # Rust検査そのものの直前に内容identityを取り直す。source-policyや
+            # receipt判定より前のsnapshotでは、既存Mがcargo実行中にさらに
+            # 変わったのかを正確に切り分けられない。
+            $global:LASTEXITCODE = 0
+            $beforeTracked = (& git -C $root status --porcelain --untracked-files=no) -join "`n"
+            $beforeTrackedStatus = $LASTEXITCODE
+            $beforeTrackedContent = @(Get-WorktreeTrackedSnapshot -RepoRoot $root)
             Invoke-Check "(1/5) cargo test --workspace" cargo $rustW4Arguments
         }
 
         $global:LASTEXITCODE = 0
         $afterTracked = (& git -C $root status --porcelain --untracked-files=no) -join "`n"
         $afterTrackedStatus = $LASTEXITCODE
+        $afterTrackedContent = @(Get-WorktreeTrackedSnapshot -RepoRoot $root)
+        $trackedContentComparison = Compare-WorktreeTrackedSnapshots -Before $beforeTrackedContent -After $afterTrackedContent
+        if (-not $trackedContentComparison.IsMatch) {
+            Write-Host ""
+            Write-Host "[NG] テストが追跡対象のfile内容またはpath集合を書き換えました" -ForegroundColor Red
+            foreach ($violation in $trackedContentComparison.Violations) {
+                Write-Host "     - $violation" -ForegroundColor Yellow
+            }
+            exit 1
+        }
         if ($afterTracked -ne $beforeTracked) {
             Write-Host ""
             Write-Host "[NG] テストが追跡対象のファイルを書き換えました" -ForegroundColor Red

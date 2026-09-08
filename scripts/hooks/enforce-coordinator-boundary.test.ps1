@@ -175,6 +175,7 @@ function New-HookPayload {
         [Parameter(Mandatory = $true)][string]$EventName,
         [Parameter(Mandatory = $true)][string]$ToolName,
         [string]$Command = "",
+        [AllowNull()]$ToolInput,
         [Parameter(Mandatory = $true)][string]$ToolUseId,
         [string]$AgentId,
         [string]$AgentType,
@@ -189,7 +190,7 @@ function New-HookPayload {
         permission_mode = "default"
         hook_event_name = $EventName
         tool_name = $ToolName
-        tool_input = [ordered]@{ command = $Command }
+        tool_input = if ($PSBoundParameters.ContainsKey("ToolInput")) { $ToolInput } else { [ordered]@{ command = $Command } }
         tool_use_id = $ToolUseId
     }
     if ($PSBoundParameters.ContainsKey("AgentId")) { $payload.agent_id = $AgentId }
@@ -223,6 +224,27 @@ function Invoke-Pre {
     $payload = New-HookPayload @payloadArguments
     $json = if ($Pretty) { $payload | ConvertTo-Json -Depth 6 } else { $payload | ConvertTo-Json -Depth 6 -Compress }
     return Invoke-HookProcess -RawInput $json -RepositoryRoot $RepositoryRoot -UseInheritedUnicodeWriter:$UseInheritedUnicodeWriter
+}
+
+function Invoke-DirectEditPre {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet("Write", "Edit", "NotebookEdit")][string]$ToolName,
+        [AllowNull()]$ToolInput,
+        [string]$ToolUseId = "direct-edit-test",
+        [string]$AgentId,
+        [string]$RepositoryRoot = $Repository
+    )
+
+    $payloadArguments = @{
+        EventName = "PreToolUse"
+        ToolName = $ToolName
+        ToolInput = $ToolInput
+        ToolUseId = $ToolUseId
+        RepositoryRoot = $RepositoryRoot
+    }
+    if ($PSBoundParameters.ContainsKey("AgentId")) { $payloadArguments.AgentId = $AgentId }
+    $payload = New-HookPayload @payloadArguments
+    return Invoke-HookProcess -RawInput ($payload | ConvertTo-Json -Depth 6 -Compress) -RepositoryRoot $RepositoryRoot
 }
 
 function Invoke-Post {
@@ -455,7 +477,7 @@ function Assert-PreAllowed {
 function Initialize-TestRepository {
     param([Parameter(Mandatory = $true)][string]$Root)
 
-    foreach ($directory in @("scripts", "scripts\hooks", "scratchpad", "docs", "target\release")) {
+    foreach ($directory in @(".claude", ".github", "apps", "crates", "docs\rules", "scripts", "scripts\hooks", "scratchpad", "target\release")) {
         [void][IO.Directory]::CreateDirectory((Join-Path $Root $directory))
     }
     foreach ($file in @("scripts\check.ps1", "scripts\check-ci.ps1", "scripts\check-release-ready.ps1", "scripts\check-receipt.ps1", "scripts\snapshot-worktrees.ps1", "scripts\watch-agents.ps1")) {
@@ -809,6 +831,50 @@ try {
     [void](Assert-DeniedResult (Invoke-HookProcess -RawInput ($numericAgentPayload | ConvertTo-Json -Depth 6 -Compress)) "non-string agent_id")
     Reset-ActiveState
     Assert-AllowedResult (Invoke-Pre -Command "cargo test --workspace; npm test; & `$anything" -ToolUseId "identity-subagent" -AgentId "agent-aa86b4da765f1d2d8" -AgentType "general-purpose") "nonempty subagent agent_id"
+
+    Write-Host "[1.5/8] coordinator direct-edit path boundary"
+    $directReportPath = Join-Path $Repository "docs\報告記録.md"
+    $directScratchpadPath = Join-Path $Repository "scratchpad\x.json"
+    $directLocalSettingsPath = Join-Path $Repository ".claude\settings.local.json"
+    $directOutsidePath = Join-Path ([Environment]::GetFolderPath('UserProfile')) ".claude\projects\ori3-c6b-test\memory\x.md"
+    Assert-AllowedResult (Invoke-DirectEditPre -ToolName "Edit" -ToolInput ([ordered]@{ file_path = $directReportPath })) "direct Edit report log"
+    Assert-AllowedResult (Invoke-DirectEditPre -ToolName "Write" -ToolInput ([ordered]@{ file_path = $directScratchpadPath })) "direct Write scratchpad"
+    Assert-AllowedResult (Invoke-DirectEditPre -ToolName "Write" -ToolInput ([ordered]@{ file_path = $directOutsidePath })) "direct Write outside repository"
+    Assert-AllowedResult (Invoke-DirectEditPre -ToolName "NotebookEdit" -ToolInput ([ordered]@{ notebook_path = $directLocalSettingsPath })) "direct NotebookEdit local settings"
+
+    $directDeniedPaths = @(
+        @{ Name = "direct Write crates"; Tool = "Write"; Path = (Join-Path $Repository "crates\bad.rs") },
+        @{ Name = "direct Edit apps"; Tool = "Edit"; Path = (Join-Path $Repository "apps\bad.ts") },
+        @{ Name = "direct Edit scripts/check.ps1"; Tool = "Edit"; Path = (Join-Path $Repository "scripts\check.ps1") },
+        @{ Name = "direct Edit rules"; Tool = "Edit"; Path = (Join-Path $Repository "docs\rules\bad.md") },
+        @{ Name = "direct NotebookEdit github"; Tool = "NotebookEdit"; Path = (Join-Path $Repository ".github\bad.ipynb") }
+    )
+    $firstDirectDenial = $null
+    foreach ($case in $directDeniedPaths) {
+        $field = if ($case.Tool -eq "NotebookEdit") { "notebook_path" } else { "file_path" }
+        $inputValue = [ordered]@{}
+        $inputValue[$field] = $case.Path
+        $reason = Assert-DeniedResult (Invoke-DirectEditPre -ToolName $case.Tool -ToolInput $inputValue) $case.Name
+        if ($null -eq $firstDirectDenial) { $firstDirectDenial = $reason }
+    }
+    Assert-Contains $firstDirectDenial "docs/報告記録.md" "direct-edit denial lists the report-log allowance"
+    Assert-Contains $firstDirectDenial "scratchpad/**" "direct-edit denial lists the scratchpad allowance"
+    Assert-Contains $firstDirectDenial ".claude/settings.local.json" "direct-edit denial lists the local-settings allowance"
+    Assert-Contains $firstDirectDenial "outside the repository" "direct-edit denial lists the outside-repository allowance"
+
+    [void](Assert-DeniedResult (Invoke-DirectEditPre -ToolName "Write" -ToolInput ([ordered]@{})) "direct Write missing file_path")
+    [void](Assert-DeniedResult (Invoke-DirectEditPre -ToolName "Write" -ToolInput ([ordered]@{ file_path = "scratchpad\relative.json" })) "direct Write relative path")
+    $parentTraversalPath = $Repository + "\scratchpad\..\scripts\bad.ps1"
+    [void](Assert-DeniedResult (Invoke-DirectEditPre -ToolName "Write" -ToolInput ([ordered]@{ file_path = $parentTraversalPath })) "direct Write parent traversal")
+    [void](Assert-DeniedResult (Invoke-DirectEditPre -ToolName "NotebookEdit" -ToolInput ([ordered]@{ file_path = $directLocalSettingsPath })) "direct NotebookEdit wrong path field")
+
+    $junctionTarget = Join-Path $Sandbox "junction-target"
+    $junctionPath = Join-Path $Repository "scratchpad\linked"
+    [void][IO.Directory]::CreateDirectory($junctionTarget)
+    [void](New-Item -ItemType Junction -Path $junctionPath -Target $junctionTarget -Force)
+    [void](Assert-DeniedResult (Invoke-DirectEditPre -ToolName "Write" -ToolInput ([ordered]@{ file_path = (Join-Path $junctionPath "through-link.json") })) "direct Write symbolic-link path")
+
+    Assert-AllowedResult (Invoke-DirectEditPre -ToolName "Write" -ToolInput ([ordered]@{ file_path = (Join-Path $Repository "scripts\worker-can-edit.ps1") }) -AgentId "agent-aa86b4da765f1d2d8") "worker direct Write bypasses coordinator-only boundary"
 
     Write-Host "[2/8] exact coordinator allowlist"
     $gate = Join-Path $Repository "scripts\check.ps1"

@@ -2,7 +2,7 @@
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$hookNames = @("pre-commit", "pre-push")
+$hookNames = @("pre-commit", "commit-msg", "pre-push")
 
 foreach ($name in $hookNames) {
     $hookPath = Join-Path $repoRoot "scripts\hooks\$name"
@@ -28,4 +28,4 @@ catch {
     throw "git hook の有効化に失敗しました: $($_.Exception.Message)"
 }
 
-Write-Host "[OK] pre-commit / pre-push フックを有効化しました (core.hooksPath=scripts/hooks)" -ForegroundColor Green
+Write-Host "[OK] pre-commit / commit-msg / pre-push フックを有効化しました (core.hooksPath=scripts/hooks)" -ForegroundColor Green

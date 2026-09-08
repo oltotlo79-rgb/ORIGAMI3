@@ -20,8 +20,14 @@ finally {
     $ErrorActionPreference = $previousErrorAction
 }
 $global:LASTEXITCODE = 0
-$outputLines = @(& $powershellExe -NoProfile -ExecutionPolicy Bypass -File $sut 2>&1)
-$exitCode = $LASTEXITCODE
+try {
+    $ErrorActionPreference = "Continue"
+    $outputLines = @(& $powershellExe -NoProfile -ExecutionPolicy Bypass -File $sut 2>&1)
+    $exitCode = $LASTEXITCODE
+}
+finally {
+    $ErrorActionPreference = $previousErrorAction
+}
 $output = $outputLines -join "`n"
 $script:assertions = 0
 
@@ -30,6 +36,166 @@ function Assert-True {
     $script:assertions++
     if (-not $Condition) { throw "[TEST NG] $Message`n$output" }
 }
+
+function Get-ReleaseWorkflowContractErrors {
+    param([string]$Text)
+
+    $errors = New-Object System.Collections.Generic.List[string]
+    $stepNames = @(
+        "Checkout release tag",
+        "Validate release version",
+        "Run pre-publication release readiness gate",
+        "Build Tauri application",
+        "Prepare component lists and verify release artifacts locally",
+        "Verify same-SHA checks and create release receipt",
+        "Publish GitHub Release",
+        "Download published release artifacts for verification"
+    )
+    $positions = @{}
+    foreach ($stepName in $stepNames) {
+        $heading = "      - name: $stepName"
+        $count = ([regex]::Matches($Text, "(?m)^$([regex]::Escape($heading))\r?$")).Count
+        if ($count -ne 1) {
+            $errors.Add("step:$stepName")
+            $positions[$stepName] = -1
+        }
+        else {
+            $positions[$stepName] = $Text.IndexOf($heading, [StringComparison]::Ordinal)
+        }
+    }
+
+    function Get-StepBlock {
+        param([string]$Name)
+        $heading = "      - name: $Name"
+        $start = $Text.IndexOf($heading, [StringComparison]::Ordinal)
+        if ($start -lt 0) { return "" }
+        $next = $Text.IndexOf("      - name:", $start + $heading.Length, [StringComparison]::Ordinal)
+        if ($next -lt 0) { return $Text.Substring($start) }
+        return $Text.Substring($start, $next - $start)
+    }
+
+    $checkoutBlock = Get-StepBlock "Checkout release tag"
+    if ($checkoutBlock -notmatch '(?m)^          fetch-depth: 0\r?$') { $errors.Add("checkout-fetch-depth") }
+
+    $versionBlock = Get-StepBlock "Validate release version"
+    foreach ($needle in @(
+        'if ([string]$tauriConfig.version -ne $version)',
+        'if ([string]$package.version -ne $version)',
+        'if ($packageLockRootVersion -ne $version)',
+        'if ($packageLockWorkspaceVersion -ne $version)',
+        'if ($cargoVersion -ne $version)'
+    )) {
+        if (-not $versionBlock.Contains($needle)) { $errors.Add("version-5-of-5:$needle") }
+    }
+
+    $gateBlock = Get-StepBlock "Run pre-publication release readiness gate"
+    if (-not ($gateBlock.Contains('-File scripts\check-release-ready.ps1') -and
+        $gateBlock.Contains('-Tag $env:RELEASE_TAG') -and
+        $gateBlock.Contains('if ($LASTEXITCODE -ne 0)'))) {
+        $errors.Add("prepublication-gate-command")
+    }
+    if (([regex]::Matches($Text, [regex]::Escape('-File scripts\check-release-ready.ps1'))).Count -ne 1) {
+        $errors.Add("prepublication-gate-count")
+    }
+
+    $recordsBlock = Get-StepBlock "Prepare component lists and verify release artifacts locally"
+    foreach ($needle in @(
+        'scripts\supply-chain-generate-release-hashes.ps1',
+        'scripts\supply-chain-generate-sbom.ps1',
+        'scripts\supply-chain-verify-release-hashes.ps1',
+        'component_records_state=$recordsState'
+    )) {
+        if (-not $recordsBlock.Contains($needle)) { $errors.Add("local-evidence:$needle") }
+    }
+    if ($recordsBlock -match '(?m)^\s*catch\s*\{') { $errors.Add("local-evidence-catch") }
+    $localOrder = @(
+        'scripts\supply-chain-generate-release-hashes.ps1',
+        'scripts\supply-chain-generate-sbom.ps1',
+        'scripts\supply-chain-verify-release-hashes.ps1',
+        '$recordsState = "complete"',
+        'component_records_state=$recordsState'
+    )
+    for ($index = 1; $index -lt $localOrder.Count; $index++) {
+        if ($recordsBlock.IndexOf($localOrder[$index - 1], [StringComparison]::Ordinal) -ge
+            $recordsBlock.IndexOf($localOrder[$index], [StringComparison]::Ordinal)) {
+            $errors.Add("local-evidence-order:$($localOrder[$index - 1])->$($localOrder[$index])")
+        }
+    }
+
+    $receiptBlock = Get-StepBlock "Verify same-SHA checks and create release receipt"
+    foreach ($needle in @(
+        'actions/workflows/ci.yml/runs?head_sha=$env:GITHUB_SHA',
+        'Tests, lint, and desktop checks',
+        '[string]$ciRun[0].status -cne "completed"',
+        '[string]$ciRun[0].conclusion -cne "success"',
+        '[string]$checksJob[0].conclusion -cne "success"',
+        'ORIGAMI3_{0}_release-receipt.json',
+        'githubRunId',
+        'githubRunAttempt',
+        'githubSha',
+        'componentLists',
+        'evidenceFiles',
+        '[string]$artifactRecord.buildId -cne [string]$env:GITHUB_RUN_ID',
+        'signed = $false',
+        'docs/progress.md:60',
+        'docs/progress.md:63',
+        'receipt_state=complete'
+    )) {
+        if (-not $receiptBlock.Contains($needle)) { $errors.Add("receipt:$needle") }
+    }
+
+    $publishBlock = Get-StepBlock "Publish GitHub Release"
+    $publishCondition = "        if: `${{ steps.publication_files.outputs.component_records_state == 'complete' && steps.release_receipt.outputs.receipt_state == 'complete' }}"
+    if (-not $publishBlock.Contains($publishCondition)) { $errors.Add("publish-if") }
+    if (-not $publishBlock.Contains('fail_on_unmatched_files: true')) { $errors.Add("publish-unmatched-files") }
+
+    for ($index = 1; $index -lt $stepNames.Count; $index++) {
+        $before = $positions[$stepNames[$index - 1]]
+        $after = $positions[$stepNames[$index]]
+        if ($before -lt 0 -or $after -lt 0 -or $before -ge $after) {
+            $errors.Add("step-order:$($stepNames[$index - 1])->$($stepNames[$index])")
+        }
+    }
+    return @($errors)
+}
+
+$releaseWorkflowPath = Join-Path (Split-Path -Parent $PSScriptRoot) ".github\workflows\release.yml"
+$releaseWorkflowText = [IO.File]::ReadAllText($releaseWorkflowPath, [Text.Encoding]::UTF8)
+$workflowErrors = @(Get-ReleaseWorkflowContractErrors $releaseWorkflowText)
+Assert-True ($workflowErrors.Count -eq 0) "release workflowの公開前関門契約が不正です: $($workflowErrors -join ', ')"
+Write-Host "[POSITIVE OK] release workflowの公開前関門契約"
+
+$fetchDepthPattern = [regex]::new('(?m)^          fetch-depth: 0\r?\n')
+$missingFetchDepth = $fetchDepthPattern.Replace($releaseWorkflowText, "", 1)
+$missingFetchDepthErrors = @(Get-ReleaseWorkflowContractErrors $missingFetchDepth)
+Assert-True ($missingFetchDepthErrors -contains "checkout-fetch-depth") "負例: fetch-depth欠落を拒否しませんでした"
+Write-Host "[NEGATIVE OK 1/4] fetch-depth欠落を拒否"
+
+$gatePattern = [regex]::new('(?ms)^      - name: Run pre-publication release readiness gate\r?\n.*?(?=^      - name:)')
+$missingGate = $gatePattern.Replace($releaseWorkflowText, "", 1)
+$missingGateErrors = @(Get-ReleaseWorkflowContractErrors $missingGate)
+Assert-True ($missingGateErrors -contains "step:Run pre-publication release readiness gate") "負例: 公開前関門step欠落を拒否しませんでした"
+Write-Host "[NEGATIVE OK 2/4] 公開前関門step欠落を拒否"
+
+$publishIfPattern = [regex]::new("(?m)^        if: \$\{\{ steps\.publication_files\.outputs\.component_records_state == 'complete' && steps\.release_receipt\.outputs\.receipt_state == 'complete' \}\}\r?\n")
+$missingPublishIf = $publishIfPattern.Replace($releaseWorkflowText, "", 1)
+$missingPublishIfErrors = @(Get-ReleaseWorkflowContractErrors $missingPublishIf)
+Assert-True ($missingPublishIfErrors -contains "publish-if") "負例: Publishのif欠落を拒否しませんでした"
+Write-Host "[NEGATIVE OK 3/4] Publishのif欠落を拒否"
+
+$reordered = $releaseWorkflowText.Replace(
+    "      - name: Run pre-publication release readiness gate",
+    "      - name: __release_gate_placeholder__"
+).Replace(
+    "      - name: Build Tauri application",
+    "      - name: Run pre-publication release readiness gate"
+).Replace(
+    "      - name: __release_gate_placeholder__",
+    "      - name: Build Tauri application"
+)
+$reorderedErrors = @(Get-ReleaseWorkflowContractErrors $reordered)
+Assert-True (@($reorderedErrors | Where-Object { $_ -like "step-order:*" }).Count -gt 0) "負例: 公開前関門と組み立ての順序入れ替えを拒否しませんでした"
+Write-Host "[NEGATIVE OK 4/4] 公開前関門と組み立ての順序入れ替えを拒否"
 
 # 本番と別の正規表現を検査しても回帰を捕まえられないため、PowerShell ASTから
 # productionの版数readerをそのまま取り出し、改行・一意性・書式を隔離fixtureで確認する。
@@ -208,7 +374,17 @@ Assert-True ($output -match [regex]::Escape([string]$snapshot.report_progress_li
 if ([int]$snapshot.unchecked -gt 0) {
     Assert-True ($output -match "ロードマップ完了関門が終了コード1を返したためリリース可ではありません: unchecked=$($snapshot.unchecked)/$($snapshot.total)") "第6段が完了関門の非0を集約した診断がありません"
 }
-Assert-True (([regex]::Matches($output, '\[FRESH\] roadmap-links\.json|\[FRESH\] roadmap-links\.md|\[FRESH\] manual-acceptance\.md')).Count -eq 3) "証拠台帳3成果物のfreshness表示がありません"
+$evidenceFreshCount = ([regex]::Matches($output, '\[FRESH\] roadmap-links\.json|\[FRESH\] roadmap-links\.md|\[FRESH\] manual-acceptance\.md')).Count
+if ($output -match '検査名台帳のtest definition hashが現在定義と不一致です:') {
+    Assert-True ($evidenceFreshCount -eq 0 -and
+        $output -match 'declared=[0-9a-f]{64}' -and
+        $output -match 'actual=[0-9a-f]{64}' -and
+        $output -match 'definitions=\d+ files=\d+' -and
+        $output -match '\[NG\] 証拠台帳が現在のロードマップsnapshotと一致しません \(終了コード: 1\)') "既知の検査名台帳hash不一致をfail-closedで報告していません"
+}
+else {
+    Assert-True ($evidenceFreshCount -eq 3) "証拠台帳3成果物のfreshness表示がありません"
+}
 Assert-True ($output -match 'MANUAL_FRESHNESS stage=2 basis=receipt fresh=False') "検査2のreceipt判定表示がありません"
 Assert-True ($output -match 'MANUAL_FRESHNESS stage=4 basis=receipt fresh=False') "検査4のreceipt判定表示がありません"
 Assert-True ($output -match 'receipt missing: docs/manual/manual-build-receipt\.json') "本体のreceipt欠落理由がありません"

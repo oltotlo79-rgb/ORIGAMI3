@@ -48,7 +48,11 @@ $script:historicalSnapshotEvidence = @{}
 $script:recordIntroductionCommits = @{}
 $script:recordContentIdentityIntroductionCommits = @{}
 $script:recordIntroductionCommitInstants = @{}
+$script:recordIntroductionIndexReady = $false
 $script:regeneratedSnapshotsAtCommit = @{}
+$script:regeneratedSnapshotsByInput = @{}
+$script:roadmapGeneratorSha256 = $null
+$script:roadmapSnapshotNewlinePolicy = 'git-cat-file-filters-bytes;generator-normalizes-crlf-and-cr-to-lf;v1'
 $script:validRemediationsByRecordLine = $null
 $script:validCorrectionsByTargetLine = $null
 # 検証済みRoadmap-Correctionのsource record行 -> 対象recordの本文(NFKC正規化済み)。
@@ -216,6 +220,76 @@ function Get-GitExecutable {
         }
     }
     return $script:gitExecutable
+}
+
+function Get-RoadmapGeneratorSha256 {
+    if ($null -eq $script:roadmapGeneratorSha256) {
+        $generatorPath = Join-Path $PSScriptRoot 'get-roadmap-status.ps1'
+        if (-not (Test-Path -LiteralPath $generatorPath -PathType Leaf)) {
+            throw "roadmap snapshot生成器が見つかりません: $generatorPath"
+        }
+        $script:roadmapGeneratorSha256 = Get-BytesSha256 -Bytes ([System.IO.File]::ReadAllBytes($generatorPath))
+    }
+    return [string]$script:roadmapGeneratorSha256
+}
+
+function Get-RegeneratedRoadmapSnapshotFromBytes {
+    param(
+        [Parameter(Mandatory = $true)][byte[]]$RoadmapBytes,
+        [Parameter(Mandatory = $true)][byte[]]$PolicyBytes
+    )
+
+    # commitが違っても、tracked roadmap/policy、実際に呼ぶ生成器、改行方針が
+    # 同じなら生成結果は同じである。永続cacheにはせず、このprocess内だけで
+    # 共有する。比較は従来どおり生成器が返す完全なsnapshot行/会計で行う。
+    $memoKey = @(
+        (Get-BytesSha256 -Bytes $RoadmapBytes),
+        (Get-BytesSha256 -Bytes $PolicyBytes),
+        (Get-RoadmapGeneratorSha256),
+        $script:roadmapSnapshotNewlinePolicy
+    ) -join ':'
+    if ($script:regeneratedSnapshotsByInput.ContainsKey($memoKey)) {
+        return $script:regeneratedSnapshotsByInput[$memoKey]
+    }
+
+    $tempParent = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd([char[]]'\/')
+    $tempName = 'ori3-report-snapshot-{0}' -f [Guid]::NewGuid().ToString('N')
+    $tempRoot = [System.IO.Path]::GetFullPath((Join-Path $tempParent $tempName))
+    [void][System.IO.Directory]::CreateDirectory($tempRoot)
+    $snapshot = $null
+    try {
+        $roadmapPath = Join-Path $tempRoot 'implementation-roadmap.md'
+        $policyPath = Join-Path $tempRoot 'roadmap-status-policy.json'
+        [System.IO.File]::WriteAllBytes($roadmapPath, $RoadmapBytes)
+        [System.IO.File]::WriteAllBytes($policyPath, $PolicyBytes)
+        $statusResult = Invoke-NativeBytes -FilePath ((Get-Process -Id $PID).Path) -Arguments @(
+            '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+            '-File', (Join-Path $PSScriptRoot 'get-roadmap-status.ps1'),
+            '-RoadmapPath', $roadmapPath, '-PolicyPath', $policyPath, '-Format', 'Json'
+        )
+        if ($statusResult.ExitCode -eq 0) {
+            $utf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
+            $statusLines = @($utf8Strict.GetString([byte[]]$statusResult.Bytes) -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            if ($statusLines.Count -eq 1) {
+                $candidate = $statusLines[0] | ConvertFrom-Json
+                if ([int]$candidate.schema -eq 1 -and [string]$candidate.scope -eq 'whole' -and -not [bool]$candidate.partial -and
+                    [int]$candidate.audited -eq [int]$candidate.total -and [int]$candidate.unclassified -eq 0 -and
+                    [int]$candidate.checked + [int]$candidate.unchecked -eq [int]$candidate.total) {
+                    $snapshot = $candidate
+                }
+            }
+        }
+    }
+    finally {
+        $resolvedTemp = [System.IO.Path]::GetFullPath($tempRoot).TrimEnd([char[]]'\/')
+        if ([System.IO.Path]::GetDirectoryName($resolvedTemp) -ne $tempParent -or
+            [System.IO.Path]::GetFileName($resolvedTemp) -notmatch '^ori3-report-snapshot-[0-9a-f]{32}$') {
+            throw "unsafe historical snapshot cleanup path: $resolvedTemp"
+        }
+        Remove-Item -LiteralPath $resolvedTemp -Recurse -Force
+    }
+    $script:regeneratedSnapshotsByInput[$memoKey] = $snapshot
+    return $snapshot
 }
 
 # 見出しとpolicyの日時文字列は、実行機のlocal timezoneではなく常にJSTである。
@@ -393,24 +467,11 @@ function Get-RecordIntroductionCommit {
         return $cached
     }
 
-    # HEAD祖先だけを正本とする。refs/wipや別branchだけにあるreportを証拠にしない。
-    $historyResult = Invoke-NativeBytes -FilePath (Get-GitExecutable) -Arguments @(
-        '-C', $root, 'log', '--format=%H', '--reverse', '--follow', 'HEAD', '--', 'docs/報告記録.md'
-    )
-    if ($historyResult.ExitCode -ne 0) {
-        throw "報告記録のHEAD履歴を列挙できません: $($historyResult.Error.Trim())"
-    }
-    $utf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
-    $commits = @($utf8Strict.GetString([byte[]]$historyResult.Bytes) -split '\r?\n' | Where-Object { $_ -match '^[0-9a-f]{40,64}$' })
-    foreach ($commit in $commits) {
-        $reportBytes = Get-TrackedFileBytesAtCommit -Commit $commit -RelativePath 'docs/報告記録.md'
-        if ($null -ne $reportBytes -and (Test-ReportBlobContainsRecordHash -Bytes $reportBytes -ExpectedHash $recordHash)) {
-            $script:recordIntroductionCommits[$recordHash] = $commit
-            return $commit
-        }
-    }
-    $script:recordIntroductionCommits[$recordHash] = ''
-    return $null
+    Initialize-RecordIntroductionCommitIndex
+    if (-not $script:recordIntroductionCommits.ContainsKey($recordHash)) { return $null }
+    $resolved = [string]$script:recordIntroductionCommits[$recordHash]
+    if ($resolved.Length -eq 0) { return $null }
+    return $resolved
 }
 
 function Get-StrictMachineLinePatterns {
@@ -497,17 +558,12 @@ function Test-ReportBlobContainsContentIdentityHash {
     return $false
 }
 
-function Get-RecordContentIdentityIntroductionCommit {
-    param([Parameter(Mandatory = $true)]$Record)
+function Initialize-RecordIntroductionCommitIndex {
+    if ($script:recordIntroductionIndexReady) { return }
 
-    $identityHash = Get-RecordContentIdentitySha256 -Record $Record
-    if ($script:recordContentIdentityIntroductionCommits.ContainsKey($identityHash)) {
-        $cached = [string]$script:recordContentIdentityIntroductionCommits[$identityHash]
-        if ($cached.Length -eq 0) { return $null }
-        return $cached
-    }
-
-    # HEAD祖先だけを正本とする。Get-RecordIntroductionCommitと同じ骨格。
+    # HEAD祖先だけを正本とし、reverse順で各report blobを1回だけ読む。従来は
+    # exact hash/内容identityの照会ごとに同じ履歴とblobを走査していた。
+    # 最初に見つかったcommitだけを登録するため、初出commitの条件は変えない。
     $historyResult = Invoke-NativeBytes -FilePath (Get-GitExecutable) -Arguments @(
         '-C', $root, 'log', '--format=%H', '--reverse', '--follow', 'HEAD', '--', 'docs/報告記録.md'
     )
@@ -518,13 +574,50 @@ function Get-RecordContentIdentityIntroductionCommit {
     $commits = @($utf8Strict.GetString([byte[]]$historyResult.Bytes) -split '\r?\n' | Where-Object { $_ -match '^[0-9a-f]{40,64}$' })
     foreach ($commit in $commits) {
         $reportBytes = Get-TrackedFileBytesAtCommit -Commit $commit -RelativePath 'docs/報告記録.md'
-        if ($null -ne $reportBytes -and (Test-ReportBlobContainsContentIdentityHash -Bytes $reportBytes -ExpectedHash $identityHash)) {
-            $script:recordContentIdentityIntroductionCommits[$identityHash] = $commit
-            return $commit
+        if ($null -eq $reportBytes) { continue }
+        $blobLines = [regex]::Split($utf8Strict.GetString([byte[]]$reportBytes), "\r\n|\n|\r")
+        for ($lineIndex = 0; $lineIndex -lt $blobLines.Count; $lineIndex++) {
+            if (-not $headerPattern.Match($blobLines[$lineIndex]).Success) { continue }
+            $endLineIndex = $blobLines.Count
+            for ($nextIndex = $lineIndex + 1; $nextIndex -lt $blobLines.Count; $nextIndex++) {
+                if ($blobLines[$nextIndex].StartsWith('## ', [StringComparison]::Ordinal)) {
+                    $endLineIndex = $nextIndex
+                    break
+                }
+            }
+            $bodyLines = if ($endLineIndex -gt $lineIndex + 1) {
+                @($blobLines[($lineIndex + 1)..($endLineIndex - 1)])
+            }
+            else { @() }
+            $candidate = [PSCustomObject]@{ Header = $blobLines[$lineIndex]; BodyLines = $bodyLines }
+            $exactHash = Get-CanonicalRecordSha256 -Record $candidate
+            if (-not $script:recordIntroductionCommits.ContainsKey($exactHash)) {
+                $script:recordIntroductionCommits[$exactHash] = $commit
+            }
+            $identityHash = Get-RecordContentIdentitySha256 -Record $candidate
+            if (-not $script:recordContentIdentityIntroductionCommits.ContainsKey($identityHash)) {
+                $script:recordContentIdentityIntroductionCommits[$identityHash] = $commit
+            }
         }
     }
-    $script:recordContentIdentityIntroductionCommits[$identityHash] = ''
-    return $null
+    $script:recordIntroductionIndexReady = $true
+}
+
+function Get-RecordContentIdentityIntroductionCommit {
+    param([Parameter(Mandatory = $true)]$Record)
+
+    $identityHash = Get-RecordContentIdentitySha256 -Record $Record
+    if ($script:recordContentIdentityIntroductionCommits.ContainsKey($identityHash)) {
+        $cached = [string]$script:recordContentIdentityIntroductionCommits[$identityHash]
+        if ($cached.Length -eq 0) { return $null }
+        return $cached
+    }
+
+    Initialize-RecordIntroductionCommitIndex
+    if (-not $script:recordContentIdentityIntroductionCommits.ContainsKey($identityHash)) { return $null }
+    $resolved = [string]$script:recordContentIdentityIntroductionCommits[$identityHash]
+    if ($resolved.Length -eq 0) { return $null }
+    return $resolved
 }
 
 function Get-RegeneratedRoadmapSnapshotAtCommit {
@@ -539,48 +632,9 @@ function Get-RegeneratedRoadmapSnapshotAtCommit {
         $script:regeneratedSnapshotsAtCommit[$Commit] = $null
         return $null
     }
-    $tempParent = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd([char[]]'\/')
-    $tempName = 'ori3-report-remediation-{0}' -f [Guid]::NewGuid().ToString('N')
-    $tempRoot = [System.IO.Path]::GetFullPath((Join-Path $tempParent $tempName))
-    [void][System.IO.Directory]::CreateDirectory($tempRoot)
-    try {
-        $roadmapPath = Join-Path $tempRoot 'implementation-roadmap.md'
-        $policyPath = Join-Path $tempRoot 'roadmap-status-policy.json'
-        [System.IO.File]::WriteAllBytes($roadmapPath, $roadmapBytes)
-        [System.IO.File]::WriteAllBytes($policyPath, $policyBytes)
-        $statusResult = Invoke-NativeBytes -FilePath ((Get-Process -Id $PID).Path) -Arguments @(
-            '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-            '-File', (Join-Path $PSScriptRoot 'get-roadmap-status.ps1'),
-            '-RoadmapPath', $roadmapPath, '-PolicyPath', $policyPath, '-Format', 'Json'
-        )
-        if ($statusResult.ExitCode -ne 0) {
-            $script:regeneratedSnapshotsAtCommit[$Commit] = $null
-            return $null
-        }
-        $utf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
-        $statusLines = @($utf8Strict.GetString([byte[]]$statusResult.Bytes) -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        if ($statusLines.Count -ne 1) {
-            $script:regeneratedSnapshotsAtCommit[$Commit] = $null
-            return $null
-        }
-        $snapshot = $statusLines[0] | ConvertFrom-Json
-        if ([int]$snapshot.schema -ne 1 -or [string]$snapshot.scope -ne 'whole' -or [bool]$snapshot.partial -or
-            [int]$snapshot.audited -ne [int]$snapshot.total -or [int]$snapshot.unclassified -ne 0 -or
-            [int]$snapshot.checked + [int]$snapshot.unchecked -ne [int]$snapshot.total) {
-            $script:regeneratedSnapshotsAtCommit[$Commit] = $null
-            return $null
-        }
-        $script:regeneratedSnapshotsAtCommit[$Commit] = $snapshot
-        return $snapshot
-    }
-    finally {
-        $resolvedTemp = [System.IO.Path]::GetFullPath($tempRoot).TrimEnd([char[]]'\/')
-        if ([System.IO.Path]::GetDirectoryName($resolvedTemp) -ne $tempParent -or
-            [System.IO.Path]::GetFileName($resolvedTemp) -notmatch '^ori3-report-remediation-[0-9a-f]{32}$') {
-            throw "unsafe remediation snapshot cleanup path: $resolvedTemp"
-        }
-        Remove-Item -LiteralPath $resolvedTemp -Recurse -Force
-    }
+    $snapshot = Get-RegeneratedRoadmapSnapshotFromBytes -RoadmapBytes $roadmapBytes -PolicyBytes $policyBytes
+    $script:regeneratedSnapshotsAtCommit[$Commit] = $snapshot
+    return $snapshot
 }
 
 function Read-ReportRemediationAccounting {
@@ -837,7 +891,6 @@ function Test-HistoricalSnapshotEvidence {
         $script:historicalSnapshotEvidence[$cacheKey] = $false
         return $false
     }
-    $utf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
     $roadmapBytes = Get-TrackedFileBytesAtCommit -Commit $introductionCommit -RelativePath 'docs/implementation-roadmap.md'
     $policyBytes = Get-TrackedFileBytesAtCommit -Commit $introductionCommit -RelativePath 'scripts/roadmap-status-policy.json'
     if ($null -eq $roadmapBytes -or $null -eq $policyBytes) {
@@ -852,38 +905,11 @@ function Test-HistoricalSnapshotEvidence {
     # subprocess呼び出し(get-roadmap-status.ps1)が返すreport_snapshot_line
     # の完全一致だけで行う。
 
-    $tempParent = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd([char[]]'\/')
-    $tempName = 'ori3-report-history-{0}' -f [Guid]::NewGuid().ToString('N')
-    $tempRoot = [System.IO.Path]::GetFullPath((Join-Path $tempParent $tempName))
-    [void][System.IO.Directory]::CreateDirectory($tempRoot)
-    try {
-        $roadmapPath = Join-Path $tempRoot 'implementation-roadmap.md'
-        $policyPath = Join-Path $tempRoot 'roadmap-status-policy.json'
-        [System.IO.File]::WriteAllBytes($roadmapPath, $roadmapBytes)
-        [System.IO.File]::WriteAllBytes($policyPath, $policyBytes)
-        $statusResult = Invoke-NativeBytes -FilePath ((Get-Process -Id $PID).Path) -Arguments @(
-            '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-            '-File', (Join-Path $PSScriptRoot 'get-roadmap-status.ps1'),
-            '-RoadmapPath', $roadmapPath, '-PolicyPath', $policyPath, '-Format', 'Json'
-        )
-        if ($statusResult.ExitCode -eq 0) {
-            $statusLines = @($utf8Strict.GetString([byte[]]$statusResult.Bytes) -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-            if ($statusLines.Count -eq 1) {
-                $historicalStatus = $statusLines[0] | ConvertFrom-Json
-                if ([string]::Equals([string]$historicalStatus.report_snapshot_line, $SnapshotLine, [StringComparison]::Ordinal)) {
-                    $script:historicalSnapshotEvidence[$cacheKey] = $true
-                    return $true
-                }
-            }
-        }
-    }
-    finally {
-        $resolvedTemp = [System.IO.Path]::GetFullPath($tempRoot).TrimEnd([char[]]'\/')
-        if ([System.IO.Path]::GetDirectoryName($resolvedTemp) -ne $tempParent -or
-            [System.IO.Path]::GetFileName($resolvedTemp) -notmatch '^ori3-report-history-[0-9a-f]{32}$') {
-            throw "unsafe historical snapshot cleanup path: $resolvedTemp"
-        }
-        Remove-Item -LiteralPath $resolvedTemp -Recurse -Force
+    $historicalStatus = Get-RegeneratedRoadmapSnapshotFromBytes -RoadmapBytes $roadmapBytes -PolicyBytes $policyBytes
+    if ($null -ne $historicalStatus -and
+        [string]::Equals([string]$historicalStatus.report_snapshot_line, $SnapshotLine, [StringComparison]::Ordinal)) {
+        $script:historicalSnapshotEvidence[$cacheKey] = $true
+        return $true
     }
 
     $script:historicalSnapshotEvidence[$cacheKey] = $false
