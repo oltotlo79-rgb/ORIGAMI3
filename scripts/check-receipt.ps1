@@ -1039,7 +1039,7 @@ function Write-Ori3CheckReceipt {
     $now = [DateTime]::UtcNow
     $expiresAt = $now.AddHours($script:Ori3ReceiptLifetimeHours)
     if ($null -ne $MaximumExpiryUtc) {
-        $boundedExpiry = $MaximumExpiryUtc.Value.ToUniversalTime()
+        $boundedExpiry = ([DateTime]$MaximumExpiryUtc).ToUniversalTime()
         if ($boundedExpiry -lt $expiresAt) {
             $expiresAt = $boundedExpiry
         }

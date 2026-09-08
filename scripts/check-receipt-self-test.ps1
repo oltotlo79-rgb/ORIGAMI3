@@ -223,8 +223,52 @@ try {
     $global:LASTEXITCODE = 0
     & git init --quiet $ReceiptSandboxRoot
     if ($LASTEXITCODE -ne 0) { throw "receipt self-test temporary repository initialization failed: exit=$LASTEXITCODE" }
-    [IO.File]::WriteAllText((Join-Path $ReceiptSandboxRoot ".gitignore"), ".origami/`n", [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $ReceiptSandboxRoot ".gitignore"), ".origami3/`n", [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $ReceiptSandboxRoot "fixture.txt"), "receipt self-test fixture`n", [Text.UTF8Encoding]::new($false))
+
+    # Exercise the real composite writer. This is intentionally before the
+    # synthetic receipt checks below so a regression in the production write
+    # path cannot be hidden by hand-built JSON.
+    $compositeContext = New-Ori3ReceiptContext "check-all" $ReceiptSandboxRoot $null
+    $shortMaximumExpiryUtc = [DateTime]::UtcNow.AddHours(1)
+    $compositePath = Write-Ori3CheckReceipt $compositeContext -MaximumExpiryUtc $shortMaximumExpiryUtc
+    Assert-Ori3SelfTest (Test-Path -LiteralPath $compositePath -PathType Leaf) "MaximumExpiryUtc composite receipt was not written"
+    Write-Host "[OK] MaximumExpiryUtc composite receipt => written"
+
+    $compositeReceipt = Read-Ori3ReceiptJson $compositePath
+    $compositeExpiryUtc = [DateTime]::Parse([string]$compositeReceipt.expiresAtUtc).ToUniversalTime()
+    Assert-Ori3SelfTest ($compositeExpiryUtc -eq $shortMaximumExpiryUtc) "shorter MaximumExpiryUtc was not used exactly"
+    $compositeHit = Find-Ori3CheckReceipt $compositeContext
+    Assert-Ori3SelfTest $compositeHit.IsHit ("bounded signed composite receipt missed: " + $compositeHit.Reason)
+    Write-Host "[OK] shorter MaximumExpiryUtc => exact signed expiry bound"
+
+    $pastMaximumRejected = $false
+    try {
+        [void](Write-Ori3CheckReceipt $compositeContext -MaximumExpiryUtc ([DateTime]::UtcNow.AddMinutes(-1)))
+    }
+    catch {
+        $pastMaximumRejected = $_.Exception.Message.Contains("期限が切れた")
+    }
+    Assert-Ori3SelfTest $pastMaximumRejected "past MaximumExpiryUtc was not rejected as expired"
+    Write-Host "[OK] past MaximumExpiryUtc => expired composite rejected"
+
+    $componentPassedAtUtc = [DateTime]::UtcNow.AddMinutes(-1)
+    $componentMaximumExpiryUtc = [DateTime]::UtcNow.AddMinutes(30)
+    $reusedComponent = [pscustomobject]@{
+        checkId = "rust-w4"
+        result = "passed"
+        passedAtUtc = $componentPassedAtUtc.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
+        expiresAtUtc = $componentMaximumExpiryUtc.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
+    }
+    [void](Write-Ori3CheckReceipt $compositeContext -MaximumExpiryUtc $componentMaximumExpiryUtc -ReusedComponentReceipt $reusedComponent)
+    $reusedCompositeReceipt = Read-Ori3ReceiptJson $compositePath
+    Assert-Ori3SelfTest ([string]$reusedCompositeReceipt.reusedComponentCheckId -eq "rust-w4") "reused component check ID was not recorded"
+    Assert-Ori3SelfTest ([string]$reusedCompositeReceipt.reusedComponentPassedAtUtc -eq [string]$reusedComponent.passedAtUtc) "reused component pass time was not recorded"
+    Assert-Ori3SelfTest ([string]$reusedCompositeReceipt.reusedComponentExpiresAtUtc -eq [string]$reusedComponent.expiresAtUtc) "reused component expiry was not recorded"
+    Assert-Ori3SelfTest ([DateTime]::Parse([string]$reusedCompositeReceipt.expiresAtUtc).ToUniversalTime() -eq $componentMaximumExpiryUtc) "reused component bound was not inherited"
+    $reusedCompositeHit = Find-Ori3CheckReceipt $compositeContext
+    Assert-Ori3SelfTest $reusedCompositeHit.IsHit ("reused-component composite receipt missed: " + $reusedCompositeHit.Reason)
+    Write-Host "[OK] ReusedComponentReceipt + MaximumExpiryUtc => provenance and expiry recorded"
 
     $context = [pscustomobject]@{
         Kind = $kind

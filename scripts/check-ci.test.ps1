@@ -313,6 +313,14 @@ try {
     Assert-True ($result.Output.Contains("static_call=True, governance_call=False")) "独立staticが残った状態でgovernance削除を拒否すること"
     Assert-True ($result.Output.Contains("GATE_DRIFT_DETECTED 8 / 8")) "C08故障でも8契約を走査すること"
 
+    Write-Host "[10/35] C08: 独立staticがreceipt自己検査step削除を検出する"
+    $caseRoot = New-CaseFixture "c08-receipt-self-test"
+    Set-ExactReplacement (Join-Path $caseRoot ".github/workflows/ci.yml") 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-receipt-self-test.ps1' 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-receipt-self-test-MISSING.ps1'
+    $result = Invoke-IsolatedChecker $caseRoot $PowerShellPath
+    Assert-Result $result $false "[NG][C08]" "独立staticがreceipt自己検査呼出しの欠落を検出すること"
+    Assert-True ($result.Output.Contains("receipt_self_test_call=False")) "receipt自己検査step削除の拒否理由を表示すること"
+    Assert-True ($result.Output.Contains("GATE_DRIFT_DETECTED 8 / 8")) "receipt自己検査step故障でも8契約を走査すること"
+
     Write-Host "[10/32] C08: governance本体から実invokeを消すと検出する"
     $caseRoot = New-CaseFixture "c08-governance-invoke-removed"
     Set-ExactReplacement `
@@ -531,7 +539,7 @@ exit 0
     Assert-True ($result.Output.Contains("ORIGAMI3_CI_CONTRACT_WARNING")) "warning-onlyの読取失敗を表示すること"
     Assert-True ($result.Output.Contains("fail-closedで拒否しました")) "warning-onlyをcallerが拒否した理由を表示すること"
 
-    Write-Host "[33/34] source policy stepがCIから欠けたらC08で拒否する"
+    Write-Host "[34/35] source policy stepがCIから欠けたらC08で拒否する"
     $caseRoot = New-CaseFixture "c08-hook-checks-step-missing"
     Set-ExactReplacement `
         (Join-Path $caseRoot ".github/workflows/ci.yml") `
@@ -541,12 +549,12 @@ exit 0
     Assert-Result $result $false "[NG][C08]" "source policy stepの欠落を静的契約で拒否すること"
     Assert-True ($result.Output.Contains("hook_checks_call=False")) "source policy step欠落の理由を表示すること"
 
-    Write-Host "[34/34] source policy commandが§10.6の表から欠けたら拒否する"
+    Write-Host "[35/35] source policy commandが§10.6の表から欠けたら拒否する"
     $caseRoot = New-CaseFixture "hook-checks-table-row-missing"
     Set-ExactReplacement `
         (Join-Path $caseRoot "docs/rules/03-品質ゲート.md") `
-        '| 25 | **禁止形・追跡fixture・ignore理由・既知欠陥形の共通関門**（pre-commitの既知欠陥形だけはHEADより悪化時に停止、`check.ps1`・`check-ci.ps1`・CIは絶対値で停止） | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/hooks/checks/run-hook-checks.ps1 -Mode Tree -RepositoryRoot .` |' `
-        '| 25 | **禁止形・追跡fixture・ignore理由・既知欠陥形の共通関門**（pre-commitの既知欠陥形だけはHEADより悪化時に停止、`check.ps1`・`check-ci.ps1`・CIは絶対値で停止） | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/hooks/checks/run-hook-checks-MISSING.ps1 -Mode Tree -RepositoryRoot .` |'
+        '| 26 | **禁止形・追跡fixture・ignore理由・既知欠陥形の共通関門**（pre-commitの既知欠陥形だけはHEADより悪化時に停止、`check.ps1`・`check-ci.ps1`・CIは絶対値で停止） | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/hooks/checks/run-hook-checks.ps1 -Mode Tree -RepositoryRoot .` |' `
+        '| 26 | **禁止形・追跡fixture・ignore理由・既知欠陥形の共通関門**（pre-commitの既知欠陥形だけはHEADより悪化時に停止、`check.ps1`・`check-ci.ps1`・CIは絶対値で停止） | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/hooks/checks/run-hook-checks-MISSING.ps1 -Mode Tree -RepositoryRoot .` |'
     $result = Invoke-IsolatedChecker $caseRoot $PowerShellPath
     Assert-Result $result $false "§10.6 の表にCI実コマンドが厳密に1行ありません" "source policy commandの表欠落を拒否すること"
     Assert-True ($result.Output.Contains("run-hook-checks.ps1 -Mode Tree")) "表から欠けたsource policy commandを表示すること"
@@ -561,7 +569,7 @@ exit 0
     }
     Assert-True $repositorySourcesUnchanged "隔離検査が本体fixtureを書き換えないこと"
 
-    Write-Host "[OK] check-ci静的契約とgovernance production形の隔離テスト: 34/34件、$script:AssertionCount assertions"
+    Write-Host "[OK] check-ci静的契約とgovernance production形の隔離テスト: 35/35件、$script:AssertionCount assertions"
 }
 finally {
     Remove-TestSandbox

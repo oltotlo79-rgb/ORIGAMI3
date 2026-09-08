@@ -967,6 +967,7 @@ function Invoke-StaticQualityGateContracts {
         }
         else {
             $staticContractMatches = @($workflowRuns.Commands | Where-Object { $_ -ceq $script:ciStaticContractCommand })
+            $receiptSelfTestMatches = @($workflowRuns.Commands | Where-Object { $_ -ceq $script:receiptSelfTestCommand })
             $governanceMatches = @($workflowRuns.Commands | Where-Object { $_ -ceq $script:roadmapGovernanceCommand })
             $hookChecksMatches = @($workflowRuns.Commands | Where-Object { $_ -ceq $script:hookChecksCommand })
             $governanceHash = Get-StaticNormalizedSha256 $roadmapGovernance
@@ -977,9 +978,11 @@ function Invoke-StaticQualityGateContracts {
             $releaseRulesComplete = Test-StaticReleaseRulesContract $releaseRules
             $releaseContract = Test-StaticReleaseRoadmapContract $releaseReady
             if ($staticContractMatches.Count -ne 1 -or
+                $receiptSelfTestMatches.Count -ne 1 -or
                 $governanceMatches.Count -ne 1 -or
                 $hookChecksMatches.Count -ne 1 -or
                 -not $rules.Contains("``$script:ciStaticContractCommand``") -or
+                -not $rules.Contains("``$script:receiptSelfTestCommand``") -or
                 -not $rules.Contains("``$script:roadmapGovernanceCommand``") -or
                 -not $rules.Contains("``$script:hookChecksCommand``") -or
                 -not $governanceBodyComplete -or
@@ -992,7 +995,7 @@ function Invoke-StaticQualityGateContracts {
                 -not $releaseContract.StageCoverage -or
                 -not $releaseContract.RoadmapCompletion -or
                 -not $releaseContract.Traceability) {
-                [void]$violations.Add("C08|独立static・roadmap governance・source policy・追跡台帳・6段release関門が同期していません (static_call=$($staticContractMatches.Count -eq 1), governance_call=$($governanceMatches.Count -eq 1), hook_checks_call=$($hookChecksMatches.Count -eq 1), body_hash=$governanceBodyComplete, checkout_full_history=$checkoutHasFullHistory, inventory_present=$inventoryPresent, doc_inventory=$docLinkInventoryConnected, release_rules=$releaseRulesComplete, release_parsed=$($releaseContract.Parsed), release_planned6=$($releaseContract.PlannedSix), release_stages=$($releaseContract.StageCoverage), release_roadmap=$($releaseContract.RoadmapCompletion), release_traceability=$($releaseContract.Traceability))")
+                [void]$violations.Add("C08|独立static・receipt自己検査・roadmap governance・source policy・追跡台帳・6段release関門が同期していません (static_call=$($staticContractMatches.Count -eq 1), governance_call=$($governanceMatches.Count -eq 1), receipt_self_test_call=$($receiptSelfTestMatches.Count -eq 1), hook_checks_call=$($hookChecksMatches.Count -eq 1), body_hash=$governanceBodyComplete, checkout_full_history=$checkoutHasFullHistory, inventory_present=$inventoryPresent, doc_inventory=$docLinkInventoryConnected, release_rules=$releaseRulesComplete, release_parsed=$($releaseContract.Parsed), release_planned6=$($releaseContract.PlannedSix), release_stages=$($releaseContract.StageCoverage), release_roadmap=$($releaseContract.RoadmapCompletion), release_traceability=$($releaseContract.Traceability))")
             }
         }
     }
@@ -1240,13 +1243,17 @@ $script:expectedCiRustArguments = @(
 )
 $script:expectedCiRustCommand = "cargo $($script:expectedCiRustArguments -join ' ')"
 $script:proposalMatrixPerformanceCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File crates/ori3-propose/tests/run-proposal-matrix.ps1 -Mode Performance"
+$script:proposalMatrixFingerprintTestCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File crates/ori3-propose/tests/run-proposal-matrix.test.ps1"
 $script:ciStaticContractCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-ci.ps1 -StaticContractOnly"
+$script:receiptSelfTestCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-receipt-self-test.ps1"
 $script:roadmapGovernanceCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-roadmap-governance.ps1"
 $script:hookChecksCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/hooks/checks/run-hook-checks.ps1 -Mode Tree -RepositoryRoot ."
 $script:roadmapGovernanceNormalizedSha256 = "A8B6927DDE4A6F1268BBDD05583F15870F247D8FCEF1BE9D29517E663798A602"
 
 $expectedChecksSteps = @(
     [pscustomobject]@{ Command = $script:ciStaticContractCommand; WorkingDirectory = "."; Executable = "powershell"; Arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/check-ci.ps1", "-StaticContractOnly") },
+    [pscustomobject]@{ Command = $script:proposalMatrixFingerprintTestCommand; WorkingDirectory = "."; Executable = "powershell"; Arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "crates/ori3-propose/tests/run-proposal-matrix.test.ps1") },
+    [pscustomobject]@{ Command = $script:receiptSelfTestCommand; WorkingDirectory = "."; Executable = "powershell"; Arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/check-receipt-self-test.ps1") },
     [pscustomobject]@{ Command = $script:roadmapGovernanceCommand; WorkingDirectory = "."; Executable = "powershell"; Arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/check-roadmap-governance.ps1") },
     [pscustomobject]@{ Command = $script:hookChecksCommand; WorkingDirectory = "."; Executable = "powershell"; Arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/hooks/checks/run-hook-checks.ps1", "-Mode", "Tree", "-RepositoryRoot", ".") },
     [pscustomobject]@{ Command = "npm ci"; WorkingDirectory = "apps/desktop"; Executable = "npm"; Arguments = @("ci") },

@@ -6,11 +6,11 @@
 - 証拠台帳対象: 186/187件
 - 明示対象外: 1件
 - 検査名台帳対象: 62/62件（roadmap-mapped、リポジトリ全検査数は主張しない）
-- 検査定義対象: 62/62件、source 38/38ファイル、definition tree SHA-256: `636317d4bb55733db5e7c520eae21c3667cc66a37f7fe8467dd2288cac53c468`
+- 検査定義対象: 62/62件、source 38/38ファイル、definition tree SHA-256: `2d75e0771a972a096ad329de818c4002e9d23007002bcf2a597f3dc12448c516`
 - 実行モード: active-default=61件、ignored-explicit=1件（後者はCI・check-ci・品質規約の明示実行を照合）
-- 検査名台帳SHA-256: `99c23ce3aa7f21d4d899620587a9701162792a17503845d4ca2970aa2a37ed4c`
+- 検査名台帳SHA-256: `a87ff7e13f7ccc104ca33c0fdf1395ed1805f50037342e39eb28fb2ad7b5f249`
 - ロードマップSHA-256: `fec483aee8b989489d3e25af7606a2b6c493465009cc59c73ce543b9ecc384f5`
-- 生成hash: `7ecd2f9ebc5fcb1838e63e394f3a62040ef5ef99eabeb03273655ed6302c277b`
+- 生成hash: `ab982ed1a68c4579884b489054a57412ab33174e3f6d56a44f24402b0b5be773`
 - M6受入: checkbox外の手動受入1件
 
 | link ID | evidence | checkbox | progress |

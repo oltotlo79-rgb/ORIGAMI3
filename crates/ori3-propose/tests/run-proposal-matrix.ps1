@@ -4,6 +4,10 @@ param(
     [string]$Mode = "Validate",
     [switch]$Resume,
 
+    [switch]$LoadFunctionsOnly,
+
+    [string]$RepositoryRoot,
+
     # 0はCPU数と空き物理memoryから安全側に決める。1以上は自動上限を越えない明示上限。
     [ValidateRange(0, 32)]
     [int]$RegressionParallelism = 0
@@ -16,21 +20,29 @@ $MatrixIterations = 100
 $ExpectedCandidateHash = "b5404e822ccd3603"
 $ExpectedStopHash = "ea05a0f8b88739bb"
 $LocalTargetDir = "C:\Users\oltot\AppData\Local\Temp\ori3-target-speed2"
-$RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
+if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
+    $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
+}
+else {
+    $RepositoryRoot = [IO.Path]::GetFullPath($RepositoryRoot).TrimEnd([char[]]"\/")
+}
 $OutputRoot = Join-Path $RepositoryRoot "verification\propose-matrix"
 $StatePath = Join-Path $OutputRoot "matrix-state.json"
 $FullLockPath = Join-Path $OutputRoot "full-controller.lock"
 $IsCi = $env:CI -eq "true" -or $env:GITHUB_ACTIONS -eq "true"
 $RegressionMemoryPerWorkerBytes = [int64](2GB)
 
-if ($Resume -and $Mode -ne "Full") {
+if (-not $LoadFunctionsOnly -and $Resume -and $Mode -ne "Full") {
     throw "-ResumeはFullでだけ使えます"
 }
-if ($Mode -eq "Full" -and $IsCi) {
+if (-not $LoadFunctionsOnly -and $Mode -eq "Full" -and $IsCi) {
     throw "FullはCIでは実行しません。ほかの作業を止めたリリース直前に手元で実行してください"
 }
 
-if ($Mode -in @("Validate", "Full")) {
+if ($LoadFunctionsOnly) {
+    $ActiveTargetDir = $null
+}
+elseif ($Mode -in @("Validate", "Full")) {
     if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
         $env:CARGO_TARGET_DIR = $LocalTargetDir
     }
@@ -180,38 +192,278 @@ function Convert-BytesToHex {
     -join ($Bytes | ForEach-Object { $_.ToString("x2") })
 }
 
-function Get-InputFingerprint {
-    $paths = @(
-        Get-ChildItem -LiteralPath (Join-Path $RepositoryRoot "crates\ori3-propose\src") -File -Filter "*.rs"
-        foreach ($crate in @("ori3-model", "ori3-geometry", "ori3-cp", "ori3-rigid", "ori3-layers")) {
-            Get-ChildItem -LiteralPath (Join-Path $RepositoryRoot "crates\$crate\src") -File -Filter "*.rs" -Recurse
-            Get-Item -LiteralPath (Join-Path $RepositoryRoot "crates\$crate\Cargo.toml")
-        }
-        Get-ChildItem -LiteralPath (Join-Path $RepositoryRoot "crates\ori3-propose\tests\fixtures") -File
-        Get-Item -LiteralPath (Join-Path $RepositoryRoot "crates\ori3-propose\tests\acceptance.rs")
-        Get-Item -LiteralPath (Join-Path $RepositoryRoot "crates\ori3-propose\tests\end_to_end.rs")
-        Get-Item -LiteralPath (Join-Path $RepositoryRoot "crates\ori3-propose\tests\proposal_matrix.rs")
-        Get-Item -LiteralPath (Join-Path $RepositoryRoot "crates\ori3-propose\tests\run-proposal-matrix.ps1")
-        Get-ChildItem -LiteralPath (Join-Path $RepositoryRoot "apps\desktop\src-tauri\src") -File -Filter "*.rs" -Recurse
-        Get-Item -LiteralPath (Join-Path $RepositoryRoot "apps\desktop\src-tauri\Cargo.toml")
-        Get-Item -LiteralPath (Join-Path $RepositoryRoot "apps\desktop\src-tauri\build.rs")
-        Get-Item -LiteralPath (Join-Path $RepositoryRoot "Cargo.toml")
-        Get-Item -LiteralPath (Join-Path $RepositoryRoot "Cargo.lock")
-        Get-Item -LiteralPath (Join-Path $RepositoryRoot "crates\ori3-propose\Cargo.toml")
-    ) | Sort-Object FullName -Unique
+function Remove-TomlComment {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Line)
 
-    $files = foreach ($path in $paths) {
-        $relativePath = $path.FullName
-        $rootPrefix = $RepositoryRoot.TrimEnd("\") + "\"
-        if ($relativePath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-            $relativePath = $relativePath.Substring($rootPrefix.Length)
+    $inSingleQuote = $false
+    $inDoubleQuote = $false
+    $escaped = $false
+    for ($index = 0; $index -lt $Line.Length; $index++) {
+        $character = $Line[$index]
+        if ($inDoubleQuote -and $escaped) {
+            $escaped = $false
+            continue
         }
-        [ordered]@{
-            path = $relativePath.Replace("\", "/")
-            sha256 = (Get-FileHash -LiteralPath $path.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($inDoubleQuote -and $character -eq '\') {
+            $escaped = $true
+            continue
+        }
+        if (-not $inDoubleQuote -and $character -eq "'") {
+            $inSingleQuote = -not $inSingleQuote
+            continue
+        }
+        if (-not $inSingleQuote -and $character -eq '"') {
+            $inDoubleQuote = -not $inDoubleQuote
+            continue
+        }
+        if (-not $inSingleQuote -and -not $inDoubleQuote -and $character -eq '#') {
+            return $Line.Substring(0, $index)
         }
     }
-    $text = $files | ConvertTo-Json -Depth 4 -Compress
+    return $Line
+}
+
+function Get-TomlAssignments {
+    param([Parameter(Mandatory = $true)][string]$ManifestPath)
+
+    $section = ""
+    $logicalLine = ""
+    $curlyDepth = 0
+    $squareDepth = 0
+    $assignments = [Collections.Generic.List[object]]::new()
+    foreach ($rawLine in Get-Content -LiteralPath $ManifestPath -Encoding UTF8) {
+        $line = (Remove-TomlComment -Line $rawLine).Trim()
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
+        if ([string]::IsNullOrWhiteSpace($logicalLine) -and $line -match '^\[(?<section>[^\]]+)\]$') {
+            $section = $Matches['section'].Trim()
+            continue
+        }
+
+        if ([string]::IsNullOrWhiteSpace($logicalLine)) {
+            $logicalLine = $line
+        }
+        else {
+            $logicalLine += " " + $line
+        }
+        $curlyDepth += ([regex]::Matches($line, '\{').Count - [regex]::Matches($line, '\}').Count)
+        $squareDepth += ([regex]::Matches($line, '\[').Count - [regex]::Matches($line, '\]').Count)
+        if ($curlyDepth -gt 0 -or $squareDepth -gt 0) {
+            continue
+        }
+        if ($logicalLine -match '^(?<key>"[^"]+"|''[^'']+''|[A-Za-z0-9_-]+)(?:\.(?<property>[A-Za-z0-9_-]+))?\s*=\s*(?<value>.+)$') {
+            $key = $Matches['key'].Trim('"', "'")
+            $assignments.Add([pscustomobject]@{
+                section = $section
+                key = $key
+                property = $Matches['property']
+                value = $Matches['value'].Trim()
+            })
+        }
+        $logicalLine = ""
+        $curlyDepth = 0
+        $squareDepth = 0
+    }
+    if (-not [string]::IsNullOrWhiteSpace($logicalLine)) {
+        throw "Cargo manifestの複数行値が閉じていません: $ManifestPath"
+    }
+    return $assignments.ToArray()
+}
+
+function Get-WorkspacePackageDirectories {
+    $rootManifest = Join-Path $RepositoryRoot "Cargo.toml"
+    $rootAssignments = @(Get-TomlAssignments -ManifestPath $rootManifest)
+    $membersAssignment = @($rootAssignments | Where-Object {
+        $_.section -eq "workspace" -and $_.key -eq "members" -and [string]::IsNullOrWhiteSpace($_.property)
+    })
+    if ($membersAssignment.Count -ne 1) {
+        throw "root Cargo.tomlのworkspace membersを一意に読めません"
+    }
+
+    $directories = [Collections.Generic.List[string]]::new()
+    foreach ($match in [regex]::Matches($membersAssignment[0].value, '["''](?<path>[^"'']+)["'']')) {
+        $memberPattern = Join-Path $RepositoryRoot $match.Groups['path'].Value
+        $resolvedMembers = @(Get-Item -Path $memberPattern -ErrorAction SilentlyContinue | Where-Object { $_.PSIsContainer })
+        if ($resolvedMembers.Count -eq 0) {
+            throw "workspace memberを解決できません: $($match.Groups['path'].Value)"
+        }
+        foreach ($member in $resolvedMembers) {
+            $directories.Add($member.FullName)
+        }
+    }
+    return $directories.ToArray()
+}
+
+function Get-PackageNameFromManifest {
+    param([Parameter(Mandatory = $true)][string]$ManifestPath)
+
+    $name = @(Get-TomlAssignments -ManifestPath $ManifestPath | Where-Object {
+        $_.section -eq "package" -and $_.key -eq "name" -and [string]::IsNullOrWhiteSpace($_.property)
+    })
+    if ($name.Count -ne 1 -or $name[0].value -notmatch '^["''](?<name>[^"'']+)["'']$') {
+        throw "package nameを読めません: $ManifestPath"
+    }
+    return $Matches['name']
+}
+
+function Test-IsDependencySection {
+    param([Parameter(Mandatory = $true)][string]$Section)
+    return $Section -match '^(dependencies|dev-dependencies|build-dependencies)$' -or
+        $Section -match '^target\..+\.(dependencies|dev-dependencies|build-dependencies)$'
+}
+
+function Get-WorkspacePathDependencyClosure {
+    param([Parameter(Mandatory = $true)][string[]]$RootPackageNames)
+
+    $rootManifest = Join-Path $RepositoryRoot "Cargo.toml"
+    $rootAssignments = @(Get-TomlAssignments -ManifestPath $rootManifest)
+    $workspacePaths = @{}
+    foreach ($assignment in @($rootAssignments | Where-Object { $_.section -eq "workspace.dependencies" })) {
+        if ($assignment.value -match '(?i)\bpath\s*=\s*["''](?<path>[^"'']+)["'']') {
+            $workspacePaths[$assignment.key] = [IO.Path]::GetFullPath((Join-Path $RepositoryRoot $Matches['path']))
+        }
+    }
+
+    $packageDirectories = @{}
+    foreach ($directory in Get-WorkspacePackageDirectories) {
+        $manifest = Join-Path $directory "Cargo.toml"
+        if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
+            throw "workspace memberのCargo.tomlがありません: $directory"
+        }
+        $packageName = Get-PackageNameFromManifest -ManifestPath $manifest
+        if ($packageDirectories.ContainsKey($packageName)) {
+            throw "workspace package名が重複しています: $packageName"
+        }
+        $packageDirectories[$packageName] = $directory
+    }
+
+    $queue = [Collections.Generic.Queue[string]]::new()
+    foreach ($packageName in $RootPackageNames) {
+        if (-not $packageDirectories.ContainsKey($packageName)) {
+            throw "runnerがbuildするworkspace packageが見つかりません: $packageName"
+        }
+        $queue.Enqueue($packageDirectories[$packageName])
+    }
+
+    $repositoryPrefix = $RepositoryRoot.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    $visited = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    while ($queue.Count -gt 0) {
+        $directory = [IO.Path]::GetFullPath($queue.Dequeue()).TrimEnd('\', '/')
+        if (-not $visited.Add($directory)) {
+            continue
+        }
+        $manifest = Join-Path $directory "Cargo.toml"
+        foreach ($dependency in @(Get-TomlAssignments -ManifestPath $manifest | Where-Object {
+            Test-IsDependencySection -Section $_.section
+        })) {
+            $dependencyDirectory = $null
+            $usesWorkspace = ($dependency.property -eq "workspace" -and $dependency.value -match '^(?i:true)$') -or
+                ($dependency.value -match '(?i)\bworkspace\s*=\s*true\b')
+            if ($usesWorkspace -and $workspacePaths.ContainsKey($dependency.key)) {
+                $dependencyDirectory = $workspacePaths[$dependency.key]
+            }
+            elseif ($dependency.value -match '(?i)\bpath\s*=\s*["''](?<path>[^"'']+)["'']') {
+                $dependencyDirectory = [IO.Path]::GetFullPath((Join-Path $directory $Matches['path']))
+            }
+            if ($null -eq $dependencyDirectory) {
+                continue
+            }
+            $dependencyDirectory = [IO.Path]::GetFullPath($dependencyDirectory).TrimEnd('\', '/')
+            if (-not $dependencyDirectory.StartsWith($repositoryPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                continue
+            }
+            if (-not (Test-Path -LiteralPath (Join-Path $dependencyDirectory "Cargo.toml") -PathType Leaf)) {
+                throw "workspace内path依存のCargo.tomlがありません: $dependencyDirectory"
+            }
+            $queue.Enqueue($dependencyDirectory)
+        }
+    }
+    return @($visited)
+}
+
+function Get-InputFingerprint {
+    $pathSet = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($packageDirectory in Get-WorkspacePathDependencyClosure -RootPackageNames @("ori3-propose", "desktop")) {
+        [void]$pathSet.Add((Join-Path $packageDirectory "Cargo.toml"))
+        $buildScript = Join-Path $packageDirectory "build.rs"
+        if (Test-Path -LiteralPath $buildScript -PathType Leaf) {
+            [void]$pathSet.Add($buildScript)
+        }
+        $sourceDirectory = Join-Path $packageDirectory "src"
+        if (Test-Path -LiteralPath $sourceDirectory -PathType Container) {
+            foreach ($sourceFile in Get-ChildItem -LiteralPath $sourceDirectory -File -Recurse) {
+                [void]$pathSet.Add($sourceFile.FullName)
+            }
+        }
+    }
+
+    $proposalTests = Join-Path $RepositoryRoot "crates\ori3-propose\tests"
+    foreach ($testInput in Get-ChildItem -LiteralPath $proposalTests -File -Recurse | Where-Object {
+        $_.Extension.ToLowerInvariant() -in @(".rs", ".json", ".ps1")
+    }) {
+        [void]$pathSet.Add($testInput.FullName)
+    }
+    foreach ($requiredRootFile in @("Cargo.toml", "Cargo.lock")) {
+        $requiredPath = Join-Path $RepositoryRoot $requiredRootFile
+        if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+            throw "fingerprint必須ファイルがありません: $requiredRootFile"
+        }
+        [void]$pathSet.Add($requiredPath)
+    }
+
+    $desktopRoot = Join-Path $RepositoryRoot "apps\desktop\src-tauri"
+    foreach ($buildInput in Get-ChildItem -LiteralPath $desktopRoot -File -Recurse | Where-Object {
+        $_.Name -like "tauri*.json" -or
+        $_.FullName.StartsWith((Join-Path $desktopRoot "capabilities") + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
+        $_.FullName.StartsWith((Join-Path $desktopRoot "icons") + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
+    }) {
+        [void]$pathSet.Add($buildInput.FullName)
+    }
+
+    $absenceMarkers = [Collections.Generic.List[string]]::new()
+    $toolchainFiles = @(Get-ChildItem -LiteralPath $RepositoryRoot -File -Filter "rust-toolchain*")
+    if ($toolchainFiles.Count -eq 0) {
+        $absenceMarkers.Add("missing:rust-toolchain*")
+    }
+    else {
+        foreach ($file in $toolchainFiles) { [void]$pathSet.Add($file.FullName) }
+    }
+    $cargoConfigurationRoot = Join-Path $RepositoryRoot ".cargo"
+    $cargoConfigurationFiles = @(if (Test-Path -LiteralPath $cargoConfigurationRoot -PathType Container) {
+        Get-ChildItem -LiteralPath $cargoConfigurationRoot -File -Filter "config*" -Recurse
+    })
+    if ($cargoConfigurationFiles.Count -eq 0) {
+        $absenceMarkers.Add("missing:.cargo/config*")
+    }
+    else {
+        foreach ($file in $cargoConfigurationFiles) { [void]$pathSet.Add($file.FullName) }
+    }
+
+    $rootPrefix = $RepositoryRoot.TrimEnd("\", "/") + [IO.Path]::DirectorySeparatorChar
+    $relativePaths = @($pathSet | ForEach-Object {
+        $fullPath = [IO.Path]::GetFullPath($_)
+        if (-not $fullPath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "fingerprint対象がrepository外です: $fullPath"
+        }
+        $fullPath.Substring($rootPrefix.Length).Replace("\", "/")
+    })
+    [Array]::Sort($relativePaths, [StringComparer]::Ordinal)
+    $files = @($relativePaths | ForEach-Object {
+        $relativePath = $_
+        $fullPath = Join-Path $RepositoryRoot $relativePath.Replace('/', [IO.Path]::DirectorySeparatorChar)
+        [ordered]@{
+            path = $relativePath
+            sha256 = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+    })
+    $markers = $absenceMarkers.ToArray()
+    [Array]::Sort($markers, [StringComparer]::Ordinal)
+    $aggregateInput = [ordered]@{
+        files = $files
+        absence_markers = $markers
+    }
+    $text = $aggregateInput | ConvertTo-Json -Depth 5 -Compress
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try {
         $aggregate = Convert-BytesToHex -Bytes ($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($text)))
@@ -221,7 +473,7 @@ function Get-InputFingerprint {
     }
     [pscustomobject]@{
         aggregate_sha256 = $aggregate
-        files = $files
+        files = @($files)
     }
 }
 
@@ -1375,6 +1627,10 @@ function Run-Full {
             $controllerLock.Dispose()
         }
     }
+}
+
+if ($LoadFunctionsOnly) {
+    return
 }
 
 New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null

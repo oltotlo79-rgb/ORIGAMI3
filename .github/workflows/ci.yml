@@ -33,6 +33,12 @@ jobs:
       - name: Verify CI static contracts independently
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-ci.ps1 -StaticContractOnly
 
+      - name: Test proposal matrix input fingerprint
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File crates/ori3-propose/tests/run-proposal-matrix.test.ps1
+
+      - name: Verify local check receipt behavior
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-receipt-self-test.ps1
+
       - name: Verify roadmap governance and negative tests
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-roadmap-governance.ps1
 
