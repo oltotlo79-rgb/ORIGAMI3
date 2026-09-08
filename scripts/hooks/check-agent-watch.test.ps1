@@ -105,6 +105,8 @@ function Invoke-ChildPowerShell {
     $startInfo.RedirectStandardInput = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
+    $startInfo.StandardOutputEncoding = $script:Utf8NoBom
+    $startInfo.StandardErrorEncoding = $script:Utf8NoBom
     $process = New-Object Diagnostics.Process
     $process.StartInfo = $startInfo
     try {
@@ -133,15 +135,38 @@ function Invoke-Checker {
     param(
         [Parameter(Mandatory = $true)][string]$PowerShellPath,
         [ValidateSet("Check", "Hook")][string]$Action = "Check",
-        [string]$Payload = ""
+        [string]$Payload = "",
+        [ValidateSet(0, 437, 932)][int]$ForceChildCodePage = 0
     )
 
-    return Invoke-ChildPowerShell -PowerShellPath $PowerShellPath -Arguments @(
-        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-        "-File", $checkerPath,
-        "-Action", $Action,
-        "-RepositoryRoot", $repositoryRoot
-    ) -StandardInput $Payload
+    # redirectの有無にかかわらず、子process自身のconsole encodingが出力byte列を決める。
+    # test-onlyの強制code pageを先に設定し、その後のUTF-8固定が必ず優先されることも検査する。
+    $childCommand = '$ProgressPreference = ''SilentlyContinue''; '
+    if ($ForceChildCodePage -ne 0) {
+        $childCommand += '[Console]::OutputEncoding = [Text.Encoding]::GetEncoding(' +
+            [string]$ForceChildCodePage + '); '
+    }
+    $childCommand += '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); ' +
+        '$OutputEncoding = [Console]::OutputEncoding; & ''' + $checkerPath.Replace("'", "''") +
+        ''' -Action ''' + $Action.Replace("'", "''") + ''' -RepositoryRoot ''' +
+        $repositoryRoot.Replace("'", "''") + '''; exit $LASTEXITCODE'
+    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
+
+    $originalConsoleEncoding = [Console]::OutputEncoding
+    try {
+        # governanceから見た子である自己検査processのcode pageも再現する。
+        # 親側の明示UTF-8復号が無ければ、UTF-8を出すcheckerの担当名がここで壊れる。
+        if ($ForceChildCodePage -ne 0) {
+            [Console]::OutputEncoding = [Text.Encoding]::GetEncoding($ForceChildCodePage)
+        }
+        return Invoke-ChildPowerShell -PowerShellPath $PowerShellPath -Arguments @(
+            "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-OutputFormat", "Text",
+            "-EncodedCommand", $encodedCommand
+        ) -StandardInput $Payload
+    }
+    finally {
+        [Console]::OutputEncoding = $originalConsoleEncoding
+    }
 }
 
 function Start-ContinuousWatcher {
@@ -704,12 +729,12 @@ if ($null -eq $powerShellCommand) {
 )
 
 try {
-    Write-Output "[1/28] runtime stateが無ければpolicy NG(1)"
+    Write-Output "[1/30] runtime stateが無ければpolicy NG(1)"
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source
     Assert-Equal $result.ExitCode 1 "stateなしをpolicy NGにすること"
     Assert-Contains $result.Output "STATE_MISSING" "stateなしの理由codeを出すこと"
 
-    Write-Output "[2/28] -Onceは成功しても有効watcherを作らない"
+    Write-Output "[2/30] -Onceは成功しても有効watcherを作らない"
     $once = Invoke-ChildPowerShell -PowerShellPath $powerShellCommand.Source -Arguments @(
         "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-File", $watcherPath,
@@ -722,7 +747,7 @@ try {
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source
     Assert-Equal $result.ExitCode 1 "-Once後も委譲前検査を通さないこと"
 
-    Write-Output "[3/28] 実watcherのfresh stateは正常(0)"
+    Write-Output "[3/30] 実watcherのfresh stateは正常(0)"
     $watcher = Start-ContinuousWatcher -PowerShellPath $powerShellCommand.Source
     $deadline = (Get-Date).AddSeconds(20)
     while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) {
@@ -735,14 +760,14 @@ try {
     Assert-Equal $result.ExitCode 0 "freshな実watcherを正常とすること"
     Assert-Contains $result.Output "[OK]" "正常理由を出すこと"
 
-    Write-Output "[4/28] watcher終了後はPID不在でpolicy NG(1)"
+    Write-Output "[4/30] watcher終了後はPID不在でpolicy NG(1)"
     $watcher.Kill()
     [void]$watcher.WaitForExit(10000)
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source
     Assert-Equal $result.ExitCode 1 "終了済みwatcherを通さないこと"
     Assert-Contains $result.Output "PROCESS_MISSING" "PID不在の理由codeを出すこと"
 
-    Write-Output "[5/28] -OnceとPID/start不一致をpolicy NG(1)"
+    Write-Output "[5/30] -OnceとPID/start不一致をpolicy NG(1)"
     Hold-TestLock
     Write-FakeRuntime -Mode "once"
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source
@@ -757,14 +782,14 @@ try {
     Assert-Equal $result.ExitCode 1 "存在しないPIDを通さないこと"
     Assert-Contains $result.Output "PROCESS_MISSING" "存在しないPIDの理由codeを出すこと"
 
-    Write-Output "[6/28] singleton lockなしをpolicy NG(1)"
+    Write-Output "[6/30] singleton lockなしをpolicy NG(1)"
     Write-FakeRuntime
     Release-TestLock
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source
     Assert-Equal $result.ExitCode 1 "lockなしを通さないこと"
     Assert-Contains $result.Output "LOCK_NOT_HELD" "lockなしの理由codeを出すこと"
 
-    Write-Output "[7/28] 12分を超えたoutput/scanをpolicy NG(1)"
+    Write-Output "[7/30] 12分を超えたoutput/scanをpolicy NG(1)"
     Hold-TestLock
     $old = [DateTime]::UtcNow.AddMinutes(-13)
     Write-FakeRuntime -ScanUtc $old -OutputUtc $old
@@ -772,13 +797,13 @@ try {
     Assert-Equal $result.ExitCode 1 "stale outputを通さないこと"
     Assert-Contains $result.Output "STALE" "staleの理由codeを出すこと"
 
-    Write-Output "[8/28] freshで自己整合してもwatcherでないcurrent PID/lockを拒否する"
+    Write-Output "[8/30] freshで自己整合してもwatcherでないcurrent PID/lockを拒否する"
     Write-FakeRuntime
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source
     Assert-Equal $result.ExitCode 1 "test runner PIDをwatcherとして通さないこと"
     Assert-Contains $result.Output "PROCESS_COMMAND_MISMATCH" "native argvが固定watcher起動形でない理由を出すこと"
 
-    Write-Output "[9/28] output hash/path不一致をpolicy NG(1)"
+    Write-Output "[9/30] output hash/path不一致をpolicy NG(1)"
     Write-FakeRuntime -StoredOutputHash ("0" * 64)
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source
     Assert-Equal $result.ExitCode 1 "output hash不一致を通さないこと"
@@ -788,13 +813,13 @@ try {
     Assert-Equal $result.ExitCode 1 "固定output path不一致を通さないこと"
     Assert-Contains $result.Output "PATH_MISMATCH" "path不一致の理由codeを出すこと"
 
-    Write-Output "[10/28] 壊れたstateは検査不能(2)"
+    Write-Output "[10/30] 壊れたstateは検査不能(2)"
     [IO.File]::WriteAllText($runtimePath, "{broken", $script:Utf8NoBom)
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source
     Assert-Equal $result.ExitCode 2 "壊れたJSONを検査不能にすること"
     Assert-Contains $result.Output "STATE_READ_ERROR" "検査不能の理由codeを出すこと"
 
-    Write-Output "[11/28] Hook modeはmainの委譲toolをfail-closedにする"
+    Write-Output "[11/30] Hook modeはmainの委譲toolをfail-closedにする"
     Release-TestLock
     foreach ($runtimeFile in @($runtimePath, $outputPath, $lockPath)) {
         if (Test-Path -LiteralPath $runtimeFile -PathType Leaf) {
@@ -827,7 +852,7 @@ try {
     Assert-Contains $result.Output '"permissionDecision":"deny"' "stateなしなら委譲を拒否すること"
     Assert-Contains $result.Output "AGENT_WATCH_POLICY_NG" "拒否理由へpolicy区分を出すこと"
 
-    Write-Output "[12/28] agent_idは非空文字列だけsubagentとして検査を省略する"
+    Write-Output "[12/30] agent_idは非空文字列だけsubagentとして検査を省略する"
     $subagentPayload = ([ordered]@{
         tool_name = "Agent"
         agent_id = "agent-123"
@@ -855,7 +880,7 @@ try {
     Assert-Equal $result.ExitCode 0 "非文字列agent_idの拒否もHook protocolでは0で返すこと"
     Assert-Contains $result.Output '"permissionDecision":"deny"' "非文字列agent_idをsubagent扱いせずmainとして検査すること"
 
-    Write-Output "[13/28] 実際の委譲payload形の長い日本語promptをraw UTF-8で壊さずJSON parseする"
+    Write-Output "[13/30] 実際の委譲payload形の長い日本語promptをraw UTF-8で壊さずJSON parseする"
     # 直前のmain扱いケースはSTATE_MISSINGを意図的に確認した。ここではpolicy拒否を
     # 排除して、長文UTF-8 payloadの復号とJSON解析だけを検査する。
     Write-FakeRuntime `
@@ -880,7 +905,7 @@ try {
     Assert-Equal $result.ExitCode 0 "日本語payloadのHook protocolを0で返すこと"
     Assert-Equal ($result.Output.Trim()) "" "長い日本語payloadをJSON parse errorで拒否しないこと"
 
-    Write-Output "[14/28] 成果後15分静止した担当へ返すまで別委譲を止め、本人返信と送信直後は通す"
+    Write-Output "[14/30] 成果後15分静止した担当へ返すまで別委譲を止め、本人返信と送信直後は通す"
     $originalDefinitionText = [IO.File]::ReadAllText($definitionPath, $script:Utf8NoBom)
     try {
         $replyDefinition = $originalDefinitionText | ConvertFrom-Json
@@ -928,14 +953,37 @@ try {
         [IO.File]::WriteAllText($sendLedgerPath, ($elapsedLedger | ConvertTo-Json -Depth 6), $script:Utf8NoBom)
         $seedLastSentUtc = [string]$elapsedWaitingRecord.lastCoordinatorSendUtc
 
+        $replyBlockPayload = New-HookPayload -ToolName "mcp__codex__codex-reply" -Text "別担当へ送る" -TargetThreadId "01a00002"
         $result = Invoke-Checker `
             -PowerShellPath $powerShellCommand.Source `
             -Action "Hook" `
-            -Payload (New-HookPayload -ToolName "mcp__codex__codex-reply" -Text "別担当へ送る" -TargetThreadId "01a00002")
+            -Payload $replyBlockPayload
         Assert-Equal $result.ExitCode 0 "返信待ち拒否もHook protocolでは0で返すこと"
         Assert-Contains $result.Output '"permissionDecision":"deny"' "返信待ち担当を残した別委譲を拒否すること"
         Assert-Contains $result.Output "AGENT_REPLY_REQUIRED" "返信待ちの専用理由codeを出すこと"
         Assert-Contains $result.Output "返信待ち担当 (01a00001, sol)" "先に返す担当を名前で示すこと"
+
+        Write-Output "[15/30] CP932を強制した子processでも返信待ち担当の日本語名を壊さない"
+        $cp932Result = Invoke-Checker `
+            -PowerShellPath $powerShellCommand.Source `
+            -Action "Hook" `
+            -Payload $replyBlockPayload `
+            -ForceChildCodePage 932
+        Assert-Equal $cp932Result.ExitCode 0 "code page 932の返信待ち拒否もHook protocolでは0で返すこと"
+        Assert-Contains $cp932Result.Output '"permissionDecision":"deny"' "code page 932でも返信待ち担当を残した別委譲を拒否すること"
+        Assert-Contains $cp932Result.Output "AGENT_REPLY_REQUIRED" "code page 932でも返信待ちの専用理由codeを出すこと"
+        Assert-Contains $cp932Result.Output "返信待ち担当 (01a00001, sol)" "code page 932でも先に返す担当を日本語名で示すこと"
+
+        Write-Output "[16/30] CP437を強制した子processでも返信待ち担当の日本語名を壊さない"
+        $cp437Result = Invoke-Checker `
+            -PowerShellPath $powerShellCommand.Source `
+            -Action "Hook" `
+            -Payload $replyBlockPayload `
+            -ForceChildCodePage 437
+        Assert-Equal $cp437Result.ExitCode 0 "code page 437の返信待ち拒否もHook protocolでは0で返すこと"
+        Assert-Contains $cp437Result.Output '"permissionDecision":"deny"' "code page 437でも返信待ち担当を残した別委譲を拒否すること"
+        Assert-Contains $cp437Result.Output "AGENT_REPLY_REQUIRED" "code page 437でも返信待ちの専用理由codeを出すこと"
+        Assert-Contains $cp437Result.Output "返信待ち担当 (01a00001, sol)" "code page 437でも先に返す担当を日本語名で示すこと"
 
         $result = Invoke-Checker `
             -PowerShellPath $powerShellCommand.Source `
@@ -986,7 +1034,7 @@ try {
         }
     }
 
-    Write-Output "[15/28] strict scopeが定義と完全一致し、read-only sentinelも論理scope 0本なら通る"
+    Write-Output "[17/30] strict scopeが定義と完全一致し、read-only sentinelも論理scope 0本なら通る"
     $legacyDefinitionText = [IO.File]::ReadAllText($definitionPath, $script:Utf8NoBom)
     try {
         $strictDefinition = New-StrictScopeDefinition
@@ -1027,7 +1075,7 @@ try {
             -Payload (New-HookPayload -ToolName "mcp__codex__codex-reply" -Text ($readOnlyScope + "`n委譲本文") -TargetThreadId "01a10002")
         Assert-True (-not $result.Output.Contains('"permissionDecision":"deny"')) "definitionのsourcePaths=[reportPath] sentinelを指示scope 0本として通すこと"
 
-        Write-Output "[16/28] 指示scopeのpath不足を拒否する"
+        Write-Output "[18/30] 指示scopeのpath不足を拒否する"
         $missingScope = New-AgentWatchScopeBlock `
             -ThreadId "01a10001" `
             -ReadOnly $false `
@@ -1046,7 +1094,7 @@ try {
         Assert-Contains $result.Output '"permissionDecision":"deny"' "strict定義でscope block自体が無い委譲を拒否すること"
         Assert-Contains $result.Output "AGENT_WATCH_SCOPE_MISSING" "scope block不足の専用理由codeを出すこと"
 
-        Write-Output "[17/28] 指示scopeの余分なpathを拒否する"
+        Write-Output "[19/30] 指示scopeの余分なpathを拒否する"
         $extraScope = New-AgentWatchScopeBlock `
             -ThreadId "01a10001" `
             -ReadOnly $false `
@@ -1060,7 +1108,7 @@ try {
         Assert-Contains $result.Output '"permissionDecision":"deny"' "definitionにないpathを指示へ足した委譲を拒否すること"
         Assert-Contains $result.Output "AGENT_WATCH_SCOPE_EXTRA_PATH" "scope余分の専用理由codeを出すこと"
 
-        Write-Output "[18/28] 指示scopeのreportPath不一致を拒否する"
+        Write-Output "[20/30] 指示scopeのreportPath不一致を拒否する"
         $wrongReportScope = New-AgentWatchScopeBlock `
             -ThreadId "01a10001" `
             -ReadOnly $false `
@@ -1073,7 +1121,7 @@ try {
         Assert-Contains $result.Output '"permissionDecision":"deny"' "異なるreportPathを名乗る委譲を拒否すること"
         Assert-Contains $result.Output "AGENT_WATCH_SCOPE_REPORT_MISMATCH" "reportPath不一致の専用理由codeを出すこと"
 
-        Write-Output "[19/28] write担当どうしの同一pathと親子pathを拒否する"
+        Write-Output "[21/30] write担当どうしの同一pathと親子pathを拒否する"
         $samePathDefinition = New-StrictScopeDefinition `
             -FirstSourcePath "src/value.rs" `
             -SecondSourcePath "src/value.rs" `
@@ -1128,7 +1176,7 @@ try {
         Assert-Contains $result.Output '"permissionDecision":"deny"' "一方のsource tree配下にある別担当reportPathを拒否すること"
         Assert-Contains $result.Output "AGENT_WATCH_SCOPE_OVERLAP" "report/source親子重複も同じ専用codeで止めること"
 
-        Write-Output "[20/28] definition変更後は次scanまで従来どおり止める"
+        Write-Output "[22/30] definition変更後は次scanまで従来どおり止める"
         Write-TestDefinition -Definition $strictDefinition
         Write-FakeRuntime `
             -ProcessId $activeWatcher.Id `
@@ -1202,7 +1250,7 @@ try {
         Assert-Contains $result.Output '"permissionDecision":"deny"' "次scan後も不正scopeSha256を通さないこと"
         Assert-Contains $result.Output "AGENT_WATCH_SCOPE_HASH_MISMATCH" "scan後のscope hash不一致を専用codeで止めること"
 
-        Write-Output "[21/28] full scan後の返信待ち本人はscope不足・壊れたscopeでも塞がない"
+        Write-Output "[23/30] full scan後の返信待ち本人はscope不足・壊れたscopeでも塞がない"
         Write-TestDefinition -Definition $strictDefinition
         $waitingFreshTime = [DateTime]::UtcNow
         foreach ($watchedFile in @($reportPath, $reportPath2, $sourcePath, $sourcePath2)) {
@@ -1277,7 +1325,7 @@ try {
         }
     }
 
-    Write-Output "[22/28] stalled/unmonitorableは全incidentへの宣言がある4 toolだけを通す"
+    Write-Output "[24/30] stalled/unmonitorableは全incidentへの宣言がある4 toolだけを通す"
     $staleTime = [DateTime]::UtcNow.AddMinutes(-61)
     foreach ($watchedFile in @($reportPath, $reportPath2, $sourcePath, $sourcePath2)) {
         [IO.File]::SetLastWriteTimeUtc($watchedFile, $staleTime)
@@ -1353,7 +1401,7 @@ try {
         Assert-True (-not $result.Output.Contains('"permissionDecision":"deny"')) "修復action=$repairAction を同じ宣言で締め出さないこと"
     }
 
-    Write-Output "[23/28] 未知・古い・重複・一部不足のincidentを拒否する"
+    Write-Output "[25/30] 未知・古い・重複・一部不足のincidentを拒否する"
     $runtimeState = [IO.File]::ReadAllText($runtimePath, $script:Utf8NoBom) | ConvertFrom-Json
     $incident1 = [string]$runtimeState.agentStates[0].incidentId
     $incident2 = [string]$runtimeState.agentStates[1].incidentId
@@ -1368,7 +1416,7 @@ try {
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $partialText)
     Assert-Contains $result.Output "STALL_RESPONSE_INCOMPLETE" "複数停滞の一部だけの宣言を拒否すること"
 
-    Write-Output "[24/28] 引用・code fence・宣言領域外のmarkerを拒否する"
+    Write-Output "[26/30] 引用・code fence・宣言領域外のmarkerを拒否する"
     $quotedText = ($validResponseText -split "`n" | ForEach-Object { "> $_" }) -join "`n"
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $quotedText)
     Assert-Contains $result.Output "STALL_RESPONSE_MISSING" "Markdown引用内のmarkerを宣言として扱わないこと"
@@ -1379,7 +1427,7 @@ try {
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "Agent" -Text $outsideMarkerText)
     Assert-Contains $result.Output "STALL_RESPONSE_QUOTED" "先頭の宣言領域外に残るmarkerを拒否すること"
 
-    Write-Output "[25/28] 4 toolの実text field以外へ置いた宣言を読まない"
+    Write-Output "[27/30] 4 toolの実text field以外へ置いた宣言を読まない"
     $wrongFieldPayloads = @(
         ([ordered]@{ tool_name = "Agent"; tool_input = [ordered]@{ prompt = "本文"; description = $validResponseText } } | ConvertTo-Json -Compress -Depth 6),
         ([ordered]@{ tool_name = "SendMessage"; tool_input = [ordered]@{ message = "本文"; prompt = $validResponseText } } | ConvertTo-Json -Compress -Depth 6),
@@ -1394,7 +1442,7 @@ try {
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload $nonStringPayload
     Assert-Contains $result.Output "HOOK_CHECK_ERROR" "実text fieldが文字列でないpayloadをfail-closedにすること"
 
-    Write-Output "[26/28] schema/count/status/hash/output summary不一致をfail-closedにする"
+    Write-Output "[28/30] schema/count/status/hash/output summary不一致をfail-closedにする"
     Write-FakeRuntime
     Update-FakeRuntime -Mutation { param($state) $state.schemaVersion = 1 }
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source
@@ -1478,7 +1526,7 @@ try {
     $result = Invoke-Checker -PowerShellPath $powerShellCommand.Source -Action "Hook" -Payload (New-HookPayload -ToolName "SendMessage" -Text $futureResponse)
     Assert-True (-not $result.Output.Contains('"permissionDecision":"deny"')) "未来mtimeのlive incident全件へ調査宣言すれば修復委譲を通すこと"
 
-    Write-Output "[27/28] production watcherの61分stale fixtureと実際の4 payload形を別processで検査する"
+    Write-Output "[29/30] production watcherの61分stale fixtureと実際の4 payload形を別processで検査する"
     if (-not $activeWatcher.HasExited) {
         $activeWatcher.Kill()
         [void]$activeWatcher.WaitForExit(10000)
@@ -1517,7 +1565,7 @@ try {
     $staleWatcher.Kill()
     [void]$staleWatcher.WaitForExit(10000)
 
-    Write-Output "[28/28] activeへ戻った後は古い宣言を拒否し、宣言なしの通常委譲を通す"
+    Write-Output "[30/30] activeへ戻った後は古い宣言を拒否し、宣言なしの通常委譲を通す"
     foreach ($runtimeFile in @($runtimePath, $outputPath, $lockPath)) {
         if (Test-Path -LiteralPath $runtimeFile -PathType Leaf) {
             Remove-Item -LiteralPath $runtimeFile -Force
@@ -1605,7 +1653,7 @@ try {
     Assert-True (-not $result.Output.Contains('"permissionDecision":"deny"')) "production相当3担当のcold Hookを通すこと"
     Assert-True ($performanceStopwatch.Elapsed.TotalSeconds -lt 5.0) "production相当3担当のcold Hookを実設定timeout 5秒未満で終えること"
 
-    Write-Output "[29/33] 本日の禁止文脈にあるcargo/npmを実行指示と誤認しない"
+    Write-Output "[31/35] 本日の禁止文脈にあるcargo/npmを実行指示と誤認しない"
     $todayProhibitionText = @(
         '- `-p desktop` や `npm` を走らせないこと',
         '- `cargo` を走らせないでください。提案の担当が長時間の検査中です',
@@ -1674,7 +1722,7 @@ try {
         Assert-True (-not $result.Output.Contains("AGENT_RUN_CONFIGURATION_REQUIRED")) "否定判定後に構成不足へ落とさないこと: $negativeInstruction"
     }
 
-    Write-Output "[30/33] 構成の無いcargo test/buildとnpm testの実行指示を拒否する"
+    Write-Output "[32/35] 構成の無いcargo test/buildとnpm testの実行指示を拒否する"
     $unconfiguredRunInstructions = @(
         "cargo test -p ori3-propose を走らせてください",
         "cargo build してください",
@@ -1694,7 +1742,7 @@ try {
         Assert-Contains $result.Output "debug構成" "拒否時にdebug構成の直し方を示すこと: $instruction"
     }
 
-    Write-Output "[31/33] 同じ命令文でreleaseまたはdebug構成が明示された実行指示を通す"
+    Write-Output "[33/35] 同じ命令文でreleaseまたはdebug構成が明示された実行指示を通す"
     $configuredRunInstructions = @(
         "cargo test -p ori3-propose --release --locked --offline を走らせてください",
         "cargo test -p ori3-layers --locked --offline（debug構成。正しさの確認のみ）",
@@ -1716,7 +1764,7 @@ try {
         Assert-True (-not $result.Output.Contains('"permissionDecision":"deny"')) "構成明示済み実行指示を通すこと: $instruction"
     }
 
-    Write-Output "[32/33] 別のcommandや段落の構成語を流用する逃げ道を拒否する"
+    Write-Output "[34/35] 別のcommandや段落の構成語を流用する逃げ道を拒否する"
     $localityInstructions = @(
         "cargo test -p ori3-propose を走らせてください`n`nori3-layersの既存検査はdebug構成です。",
         "cargo test -p ori3-propose --release を走らせてください。npm test してください",
@@ -1744,7 +1792,7 @@ try {
         Assert-Contains $result.Output "--release" "局所性違反へ具体的な修復を示すこと: $instruction"
     }
 
-    Write-Output "[33/33] baseline・完了報告・code fenceを構成gateの逃げ道にしない"
+    Write-Output "[35/35] baseline・完了報告・code fenceを構成gateの逃げ道にしない"
     $nonDirectiveRunText = @(
         "対象検査 command: npm.cmd --prefix apps/desktop test",
         "対象検査 baseline: 終了コード 0、2,345 passed",
@@ -1769,7 +1817,7 @@ try {
         -Payload (New-HookPayload -ToolName "Agent" -Text $codeFenceInstruction)
     Assert-Contains $result.Output "AGENT_RUN_CONFIGURATION_REQUIRED" "code fenceで無構成実行指示を隠せないこと"
 
-    Write-Output "[34/38] 公開型変更の強い命令だけをCargo逆依存とwire契約の非blocking警告へ変換する"
+    Write-Output "[36/40] 公開型変更の強い命令だけをCargo逆依存とwire契約の非blocking警告へ変換する"
     $legacyStrongTypeResult = Invoke-Checker `
         -PowerShellPath $powerShellCommand.Source `
         -Action "Hook" `
@@ -2000,7 +2048,7 @@ const DESKTOP_STORE: &str = "../../apps/desktop/src-tauri/src/store.rs";
     Assert-True (-not $result.Output.Contains("dependent=ori3-propose")) "否定segment由来のpropose警告を出さないこと"
     Assert-True (-not $result.Output.Contains('"permissionDecision"')) "target束縛warningを非blockingに保つこと"
 
-    Write-Output "[35/38] 禁止・過去・調査・逆依存なしを公開型変更warningへ誤分類しない"
+    Write-Output "[37/40] 禁止・過去・調査・逆依存なしを公開型変更warningへ誤分類しない"
     $dependencyNegativeInstructions = @(
         "``crates/ori3-model/src/lib.rs::FoldStep``のfieldを追加しないでください。",
         "``crates/ori3-model/src/lib.rs::FoldStep``へのfield追加を許可しないでください。",
@@ -2036,7 +2084,7 @@ const DESKTOP_STORE: &str = "../../apps/desktop/src-tauri/src/store.rs";
         [IO.File]::WriteAllText($webFixturePath, $originalWebFixture, $script:Utf8NoBom)
     }
 
-    Write-Output "[36/38] 依存側も同じwrite scopeなら公開型変更warningを出さない"
+    Write-Output "[38/40] 依存側も同じwrite scopeなら公開型変更warningを出さない"
     if (-not $dependencyWatcher.HasExited) {
         $dependencyWatcher.Kill()
         [void]$dependencyWatcher.WaitForExit(10000)
@@ -2090,7 +2138,7 @@ const DESKTOP_STORE: &str = "../../apps/desktop/src-tauri/src/store.rs";
     Assert-True (-not $result.Output.Contains("AGENT_PUBLIC_TYPE_DEPENDENCY_WARNING")) "direct依存側がwrite scope内なら警告しないこと"
     Assert-True (-not $result.Output.Contains('"permissionDecision":"deny"')) "依存側scope内の公開型変更を拒否しないこと"
 
-    Write-Output "[37/38] 公開型変更intentなしではCargoを読まず、読取不能でもwarningだけにする"
+    Write-Output "[39/40] 公開型変更intentなしではCargoを読まず、読取不能でもwarningだけにする"
     $validWorkspaceManifest = [IO.File]::ReadAllText((Join-Path $repositoryRoot "Cargo.toml"), $script:Utf8NoBom)
     try {
         [IO.File]::WriteAllText((Join-Path $repositoryRoot "Cargo.toml"), "[workspace]`nresolver = `"2`"", $script:Utf8NoBom)
@@ -2122,7 +2170,7 @@ const DESKTOP_STORE: &str = "../../apps/desktop/src-tauri/src/store.rs";
         [IO.File]::WriteAllText((Join-Path $repositoryRoot "Cargo.toml"), $validWorkspaceManifest, $script:Utf8NoBom)
     }
 
-    Write-Output "[38/38] Cargo依存warningを5秒未満かつ対照中央値+1秒以内に保つ"
+    Write-Output "[40/40] Cargo依存warningを5秒未満かつ対照中央値+1秒以内に保つ"
     if (-not $dependencyCoveredWatcher.HasExited) {
         $dependencyCoveredWatcher.Kill()
         [void]$dependencyCoveredWatcher.WaitForExit(10000)
@@ -2176,7 +2224,7 @@ const DESKTOP_STORE: &str = "../../apps/desktop/src-tauri/src/store.rs";
     Write-Output ("DEPENDENCY_WARNING_PAIRED_GUARD_MEDIAN_MS={0}" -f $dependencyGuardMedian)
     Assert-True ($dependencyGuardMedian -le ($dependencyControlMedian + 1000)) "同条件3回の中央値でCargo依存warningの追加時間を1秒以内に保つこと"
 
-    Write-Output "[39/39] strict sourcePathが外部worktreeでも所属Cargo workspaceのnormal/target逆依存を警告する"
+    Write-Output "[41/41] strict sourcePathが外部worktreeでも所属Cargo workspaceのnormal/target逆依存を警告する"
     if (-not $dependencyPerformanceWatcher.HasExited) {
         $dependencyPerformanceWatcher.Kill()
         [void]$dependencyPerformanceWatcher.WaitForExit(10000)
@@ -2276,7 +2324,7 @@ external-model.workspace = true
     Assert-True (-not $result.Output.Contains("AGENT_PUBLIC_TYPE_DEPENDENCY_CHECK_UNAVAILABLE")) "外部worktreeをmain Root固定による読取不能へ落とさないこと"
     Assert-True ($externalStopwatch.Elapsed.TotalSeconds -lt 5.0) "外部worktree依存warningを実設定timeout 5秒未満で終えること"
 
-    Write-Output ("check-agent-watch self-test passed: 39 cases, {0} assertions" -f $script:AssertionCount)
+    Write-Output ("check-agent-watch self-test passed: 41 cases, {0} assertions" -f $script:AssertionCount)
 }
 finally {
     Remove-TestSandbox
