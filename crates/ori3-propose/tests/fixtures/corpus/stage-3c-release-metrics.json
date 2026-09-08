@@ -14,7 +14,7 @@
   },
   "fixture_integrity": {
     "algorithm": "fnv1a64",
-    "manifest_checksum": "fbd7eb537e31f68b",
+    "manifest_checksum": "899ebc1647412f0a",
     "inputs": [
       {
         "case_id": "crane",

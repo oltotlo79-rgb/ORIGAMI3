@@ -634,7 +634,14 @@
           "improvement_met": null,
           "target_met": true,
           "distance_to_target": 0.2520378003420609,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "not_measured_in_release",
+            "measured_release_elapsed_millis": null,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": null,
+            "within_release_case_gate": null
+          },
           "unmet_reasons": []
         },
         "time_budget": {
@@ -644,7 +651,7 @@
           "measured_release_elapsed_millis": null,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "The maximum of three full-product-path debug pilot measurements was 8873ms. Stage 3-B uses the heavier crane observation to set 90000ms debug, 10000ms release, and 300000ms release-corpus limits; stage 3-C will replace single-run evidence with five release runs. The 10000/300000ms values are retained as provisional historical references and are not acceptance gates; recalibration is pending."
         }
@@ -744,7 +751,14 @@
           "improvement_met": null,
           "target_met": false,
           "distance_to_target": 0.8466199754808652,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "within_limit",
+            "measured_release_elapsed_millis": 4754,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": true,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "not_checked_to_finish"
           ]
@@ -756,7 +770,7 @@
           "measured_release_elapsed_millis": 4754,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 4754ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -850,7 +864,14 @@
           "improvement_met": null,
           "target_met": false,
           "distance_to_target": null,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "within_limit",
+            "measured_release_elapsed_millis": 0,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": true,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "no_usable_plan",
             "safety_not_verified"
@@ -863,7 +884,7 @@
           "measured_release_elapsed_millis": 0,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 0ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -963,7 +984,14 @@
           "improvement_met": null,
           "target_met": false,
           "distance_to_target": 0.8946002036770435,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "within_limit",
+            "measured_release_elapsed_millis": 1051,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": true,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "not_checked_to_finish"
           ]
@@ -975,7 +1003,7 @@
           "measured_release_elapsed_millis": 1051,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 1051ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -1075,7 +1103,14 @@
           "improvement_met": null,
           "target_met": true,
           "distance_to_target": 0.48090289608023234,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "within_limit",
+            "measured_release_elapsed_millis": 1455,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": true,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": []
         },
         "time_budget": {
@@ -1085,7 +1120,7 @@
           "measured_release_elapsed_millis": 1455,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 1455ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -1185,7 +1220,14 @@
           "improvement_met": false,
           "target_met": false,
           "distance_to_target": 0.3727432343428821,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "within_limit",
+            "measured_release_elapsed_millis": 973,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": true,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "non_positive_improvement"
           ]
@@ -1197,7 +1239,7 @@
           "measured_release_elapsed_millis": 973,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 973ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -1297,7 +1339,14 @@
           "improvement_met": true,
           "target_met": true,
           "distance_to_target": 0.11886911054192334,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "within_limit",
+            "measured_release_elapsed_millis": 81,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": true,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": []
         },
         "time_budget": {
@@ -1307,7 +1356,7 @@
           "measured_release_elapsed_millis": 81,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 81ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -1401,7 +1450,14 @@
           "improvement_met": null,
           "target_met": false,
           "distance_to_target": null,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "within_limit",
+            "measured_release_elapsed_millis": 340,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": true,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "no_usable_plan",
             "safety_not_verified"
@@ -1414,7 +1470,7 @@
           "measured_release_elapsed_millis": 340,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 340ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -1514,7 +1570,14 @@
           "improvement_met": null,
           "target_met": false,
           "distance_to_target": null,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "within_limit",
+            "measured_release_elapsed_millis": 2,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": true,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "no_usable_plan",
             "safety_not_verified"
@@ -1527,7 +1590,7 @@
           "measured_release_elapsed_millis": 2,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 2ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -1621,7 +1684,14 @@
           "improvement_met": null,
           "target_met": false,
           "distance_to_target": 0.6750348232796621,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "within_limit",
+            "measured_release_elapsed_millis": 7390,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": true,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "not_checked_to_finish"
           ]
@@ -1633,7 +1703,7 @@
           "measured_release_elapsed_millis": 7390,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 7390ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -1733,7 +1803,14 @@
           "improvement_met": false,
           "target_met": false,
           "distance_to_target": null,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "within_limit",
+            "measured_release_elapsed_millis": 4,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": true,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "no_usable_plan",
             "safety_not_verified"
@@ -1746,7 +1823,7 @@
           "measured_release_elapsed_millis": 4,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 4ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -1840,7 +1917,14 @@
           "improvement_met": false,
           "target_met": false,
           "distance_to_target": 0.3403348644073589,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "within_limit",
+            "measured_release_elapsed_millis": 20412,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": true,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "non_positive_improvement"
           ]
@@ -1852,7 +1936,7 @@
           "measured_release_elapsed_millis": 20412,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 20412ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -1952,7 +2036,14 @@
           "improvement_met": false,
           "target_met": false,
           "distance_to_target": 0.3837551718106598,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "within_limit",
+            "measured_release_elapsed_millis": 8054,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": true,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "non_positive_improvement"
           ]
@@ -1964,7 +2055,7 @@
           "measured_release_elapsed_millis": 8054,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 8054ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -2058,7 +2149,14 @@
           "improvement_met": null,
           "target_met": false,
           "distance_to_target": 0.304011837573277,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "within_limit",
+            "measured_release_elapsed_millis": 13221,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": true,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "not_checked_to_finish"
           ]
@@ -2070,7 +2168,7 @@
           "measured_release_elapsed_millis": 13221,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 13221ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -2170,7 +2268,14 @@
           "improvement_met": null,
           "target_met": false,
           "distance_to_target": 0.21651546676037026,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "within_limit",
+            "measured_release_elapsed_millis": 3035,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": true,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "not_checked_to_finish"
           ]
@@ -2182,7 +2287,7 @@
           "measured_release_elapsed_millis": 3035,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 3035ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -2276,7 +2381,14 @@
           "improvement_met": false,
           "target_met": false,
           "distance_to_target": 0.7281831537338006,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "within_limit",
+            "measured_release_elapsed_millis": 22570,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": true,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "non_positive_improvement"
           ]
@@ -2288,7 +2400,7 @@
           "measured_release_elapsed_millis": 22570,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 22570ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -2388,7 +2500,14 @@
           "improvement_met": false,
           "target_met": false,
           "distance_to_target": 0.3452873767042597,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "within_limit",
+            "measured_release_elapsed_millis": 7055,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": true,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "non_positive_improvement"
           ]
@@ -2400,7 +2519,7 @@
           "measured_release_elapsed_millis": 7055,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 7055ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -2494,7 +2613,14 @@
           "improvement_met": false,
           "target_met": false,
           "distance_to_target": 0.6156655976378516,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "over_limit",
+            "measured_release_elapsed_millis": 30653,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": false,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "non_positive_improvement"
           ]
@@ -2506,7 +2632,7 @@
           "measured_release_elapsed_millis": 30653,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 30653ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -2606,7 +2732,14 @@
           "improvement_met": true,
           "target_met": true,
           "distance_to_target": 0.32717580493615595,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "within_limit",
+            "measured_release_elapsed_millis": 8601,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": true,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": []
         },
         "time_budget": {
@@ -2616,7 +2749,7 @@
           "measured_release_elapsed_millis": 8601,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 8601ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -2710,7 +2843,14 @@
           "improvement_met": null,
           "target_met": false,
           "distance_to_target": 0.6479043379213749,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "over_limit",
+            "measured_release_elapsed_millis": 33538,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": false,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "not_checked_to_finish"
           ]
@@ -2722,7 +2862,7 @@
           "measured_release_elapsed_millis": 33538,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 33538ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -2822,7 +2962,14 @@
           "improvement_met": null,
           "target_met": true,
           "distance_to_target": 0.36576389754122346,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "within_limit",
+            "measured_release_elapsed_millis": 6783,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": true,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": []
         },
         "time_budget": {
@@ -2832,7 +2979,7 @@
           "measured_release_elapsed_millis": 6783,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 6783ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -2926,7 +3073,14 @@
           "improvement_met": false,
           "target_met": false,
           "distance_to_target": 0.4709641521238054,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "over_limit",
+            "measured_release_elapsed_millis": 30009,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": false,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "non_positive_improvement"
           ]
@@ -2938,7 +3092,7 @@
           "measured_release_elapsed_millis": 30009,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 30009ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -3038,7 +3192,14 @@
           "improvement_met": false,
           "target_met": false,
           "distance_to_target": 0.35877865359962025,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "within_limit",
+            "measured_release_elapsed_millis": 11061,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": true,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "non_positive_improvement"
           ]
@@ -3050,7 +3211,7 @@
           "measured_release_elapsed_millis": 11061,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 11061ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -3144,7 +3305,14 @@
           "improvement_met": false,
           "target_met": false,
           "distance_to_target": 0.5075082341130732,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "over_limit",
+            "measured_release_elapsed_millis": 30147,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": false,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "non_positive_improvement"
           ]
@@ -3156,7 +3324,7 @@
           "measured_release_elapsed_millis": 30147,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 30147ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -3256,7 +3424,14 @@
           "improvement_met": true,
           "target_met": true,
           "distance_to_target": 0.29517542732118185,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "within_limit",
+            "measured_release_elapsed_millis": 8838,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": true,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": []
         },
         "time_budget": {
@@ -3266,7 +3441,7 @@
           "measured_release_elapsed_millis": 8838,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 8838ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -3360,7 +3535,14 @@
           "improvement_met": null,
           "target_met": false,
           "distance_to_target": 0.5152143976454852,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "over_limit",
+            "measured_release_elapsed_millis": 30020,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": false,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "not_checked_to_finish"
           ]
@@ -3372,7 +3554,7 @@
           "measured_release_elapsed_millis": 30020,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 30020ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -3472,7 +3654,14 @@
           "improvement_met": false,
           "target_met": false,
           "distance_to_target": 0.2568031199809922,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "within_limit",
+            "measured_release_elapsed_millis": 19607,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": true,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "non_positive_improvement"
           ]
@@ -3484,7 +3673,7 @@
           "measured_release_elapsed_millis": 19607,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 19607ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -3578,7 +3767,14 @@
           "improvement_met": false,
           "target_met": false,
           "distance_to_target": 0.7229702026952364,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "over_limit",
+            "measured_release_elapsed_millis": 30013,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": false,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "non_positive_improvement"
           ]
@@ -3590,7 +3786,7 @@
           "measured_release_elapsed_millis": 30013,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 30013ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -3690,7 +3886,14 @@
           "improvement_met": true,
           "target_met": true,
           "distance_to_target": 0.3661975984396344,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "within_limit",
+            "measured_release_elapsed_millis": 21683,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": true,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": []
         },
         "time_budget": {
@@ -3700,7 +3903,7 @@
           "measured_release_elapsed_millis": 21683,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 21683ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -3794,7 +3997,14 @@
           "improvement_met": false,
           "target_met": false,
           "distance_to_target": 0.6884401214792255,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "over_limit",
+            "measured_release_elapsed_millis": 32191,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": false,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": [
             "non_positive_improvement"
           ]
@@ -3806,7 +4016,7 @@
           "measured_release_elapsed_millis": 32191,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 32191ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }
@@ -3906,7 +4116,14 @@
           "improvement_met": true,
           "target_met": true,
           "distance_to_target": 0.37083845957417044,
-          "time_status": "pending_limit_recalibration",
+          "time_status": {
+            "status": "over_limit",
+            "measured_release_elapsed_millis": 30031,
+            "product_search_watchdog_millis": 30000,
+            "release_case_gate_millis": 50000,
+            "within_product_search_watchdog": false,
+            "within_release_case_gate": true
+          },
           "unmet_reasons": []
         },
         "time_budget": {
@@ -3916,7 +4133,7 @@
           "measured_release_elapsed_millis": 30031,
           "release_case_limit_millis": 10000,
           "release_corpus_limit_millis": 300000,
-          "limit_status": "pending_recalibration",
+          "limit_status": "approved_limits_unchanged",
           "ordinary_test_enforces_elapsed": false,
           "basis": "Stage 3-C product-path performance repetition 1 observed 30031ms with the exact 30000ms per-search watchdog. Functional recorded_current uses deterministic search without a wall-clock cutoff. The historical 10000ms case and 300000ms corpus limits remain non-enforced pending coordinator gate approval; the full five-run evidence is stored separately."
         }

@@ -335,8 +335,19 @@ struct TargetAssessment {
     improvement_met: Option<bool>,
     target_met: bool,
     distance_to_target: Option<f64>,
-    time_status: String,
+    time_status: TimeStatus,
     unmet_reasons: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct TimeStatus {
+    status: String,
+    measured_release_elapsed_millis: Option<u64>,
+    product_search_watchdog_millis: u64,
+    release_case_gate_millis: u64,
+    within_product_search_watchdog: Option<bool>,
+    within_release_case_gate: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1629,13 +1640,32 @@ fn calculate_recorded_assessment(
     if !safety_met {
         unmet_reasons.push("safety_not_verified".to_owned());
     }
+    let measured_release_elapsed_millis = current.time_budget.measured_release_elapsed_millis;
+    let within_product_search_watchdog = measured_release_elapsed_millis
+        .map(|elapsed| elapsed <= current.time_budget.product_search_watchdog_millis);
+    let within_release_case_gate =
+        measured_release_elapsed_millis.map(|elapsed| elapsed <= STAGE_3D_RELEASE_CASE_GATE_MILLIS);
+    let time_status = TimeStatus {
+        status: match (within_product_search_watchdog, within_release_case_gate) {
+            (None, None) => "not_measured_in_release",
+            (Some(true), Some(true)) => "within_limit",
+            (Some(_), Some(_)) => "over_limit",
+            _ => unreachable!("release時間判定の有無が不一致"),
+        }
+        .to_owned(),
+        measured_release_elapsed_millis,
+        product_search_watchdog_millis: current.time_budget.product_search_watchdog_millis,
+        release_case_gate_millis: STAGE_3D_RELEASE_CASE_GATE_MILLIS,
+        within_product_search_watchdog,
+        within_release_case_gate,
+    };
     TargetAssessment {
         functional_met,
         safety_met,
         improvement_met,
         target_met,
         distance_to_target,
-        time_status: "pending_limit_recalibration".to_owned(),
+        time_status,
         unmet_reasons,
     }
 }
@@ -2039,7 +2069,7 @@ fn assert_product_time_metadata_contract(
     assert!(!expectation.time_budget.ordinary_test_enforces_elapsed);
     assert_eq!(
         expectation.time_budget.limit_status,
-        "pending_recalibration"
+        "approved_limits_unchanged"
     );
     assert_eq!(
         expectation.time_budget.debug_case_limit_millis,
@@ -2573,6 +2603,10 @@ fn regenerate_one_corpus_baseline() {
         assert_current_corpus_regeneration_source_revision();
         return;
     }
+    if std::env::var("ORI3_REGENERATE_CORPUS_ASSESSMENTS").as_deref() == Ok("1") {
+        regenerate_corpus_assessment_metadata();
+        return;
+    }
     if std::env::var("ORI3_REGENERATE_CORPUS_FROM_EVIDENCE").as_deref() == Ok("1") {
         if cfg!(debug_assertions) {
             panic!("corpus正本再生成はrelease evidenceでだけ実行する");
@@ -2930,6 +2964,88 @@ fn corpus_all_thirty_cases_match_recorded_current() {
         baseline_mismatches.is_empty(),
         "recorded-current mismatch cases: {baseline_mismatches:?}"
     );
+}
+
+/// 記録値の一致とは別に、release目標そのものを明示実行で判定する。
+/// 未設定の通常testでは現在値を表示するだけで、ignored testにはしない。
+#[test]
+fn corpus_release_goal_gate() {
+    let (_, manifest) = load_manifest().expect("manifestを読めない");
+    let target_cases: Vec<_> = manifest
+        .cases
+        .iter()
+        .filter(|case| case.counts_toward_target)
+        .collect();
+    assert_eq!(target_cases.len(), 30);
+    assert_eq!(
+        target_cases
+            .iter()
+            .filter(|case| case.target.class == "must_complete")
+            .count(),
+        12
+    );
+    assert_eq!(
+        target_cases
+            .iter()
+            .filter(|case| case.target.class == "safe_partial_allowed")
+            .count(),
+        18
+    );
+
+    let assessments: Vec<_> = target_cases
+        .iter()
+        .map(|case| {
+            (
+                case.id.as_str(),
+                calculate_recorded_assessment(
+                    &case.target,
+                    &case.recorded_current,
+                    &manifest.numeric_policy,
+                ),
+            )
+        })
+        .collect();
+    let target_met = assessments
+        .iter()
+        .filter(|(_, assessment)| assessment.target_met)
+        .count();
+    let no_plan = assessments
+        .iter()
+        .filter(|(_, assessment)| {
+            assessment
+                .unmet_reasons
+                .iter()
+                .any(|reason| reason == "no_usable_plan")
+        })
+        .count();
+    let safety_not_verified = assessments
+        .iter()
+        .filter(|(_, assessment)| {
+            assessment
+                .unmet_reasons
+                .iter()
+                .any(|reason| reason == "safety_not_verified")
+        })
+        .count();
+    let unmet: Vec<_> = assessments
+        .iter()
+        .filter(|(_, assessment)| !assessment.target_met)
+        .map(|(case_id, assessment)| format!("{case_id}: {}", assessment.unmet_reasons.join(",")))
+        .collect();
+
+    if std::env::var("ORI3_CORPUS_GOAL_GATE").as_deref() != Ok("1") {
+        println!(
+            "CORPUS_RELEASE_GOAL_GATE explicit=ORI3_CORPUS_GOAL_GATE=1 current={target_met}/30 no_plan={no_plan} safety_not_verified={safety_not_verified}; 目標関門はORI3_CORPUS_GOAL_GATE=1で明示実行する"
+        );
+        return;
+    }
+
+    assert!(
+        target_met == 30 && no_plan == 0 && safety_not_verified == 0,
+        "corpus release goal unmet: target_met={target_met}/30 no_plan={no_plan} safety_not_verified={safety_not_verified}\n{}",
+        unmet.join("\n")
+    );
+    println!("CORPUS_RELEASE_GOAL_GATE target_met=30/30 no_plan=0 safety_not_verified=0");
 }
 
 #[test]
@@ -4442,6 +4558,49 @@ fn predeclared_target_contract(manifest: &CorpusManifest) -> Value {
     })
 }
 
+fn assessment_regeneration_immutable_contract(manifest: &CorpusManifest) -> Value {
+    let cases: Vec<_> = manifest
+        .cases
+        .iter()
+        .map(|case| {
+            serde_json::json!({
+                "id": &case.id,
+                "input": &case.input,
+                "target": &case.target,
+                "outcome": case.recorded_current.outcome,
+                "execution_failure": &case.recorded_current.execution_failure,
+                "selected_candidate_index": case.recorded_current.selected_candidate_index,
+                "candidate_count": case.recorded_current.candidate_count,
+                "candidate_statuses": &case.recorded_current.candidate_statuses,
+                "stop_reasons": &case.recorded_current.stop_reasons,
+                "initial_gaps": case.recorded_current.initial_gaps,
+                "final_gaps": case.recorded_current.final_gaps,
+                "initial_weighted_gap": case.recorded_current.initial_weighted_gap,
+                "final_weighted_gap": case.recorded_current.final_weighted_gap,
+                "improvement_absolute": case.recorded_current.improvement_absolute,
+                "improvement_ratio": case.recorded_current.improvement_ratio,
+                "safety": &case.recorded_current.safety,
+                "normalized_candidate_hash": &case.recorded_current.normalized_candidate_hash,
+                "stop_reason_hash": &case.recorded_current.stop_reason_hash,
+                "normalized_result_hash": &case.recorded_current.normalized_result_hash,
+                "all_returned_plans_safe": case.recorded_current.all_returned_plans_safe,
+                "product_search_watchdog_millis": case.recorded_current.time_budget.product_search_watchdog_millis,
+                "measured_debug_elapsed_millis": case.recorded_current.time_budget.measured_debug_elapsed_millis,
+                "debug_case_limit_millis": case.recorded_current.time_budget.debug_case_limit_millis,
+                "measured_release_elapsed_millis": case.recorded_current.time_budget.measured_release_elapsed_millis,
+                "release_case_limit_millis": case.recorded_current.time_budget.release_case_limit_millis,
+                "release_corpus_limit_millis": case.recorded_current.time_budget.release_corpus_limit_millis,
+                "ordinary_test_enforces_elapsed": case.recorded_current.time_budget.ordinary_test_enforces_elapsed,
+                "basis": &case.recorded_current.time_budget.basis,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "target_contract": predeclared_target_contract(manifest),
+        "cases": cases,
+    })
+}
+
 fn assert_lower_hex_digest(label: &str, value: &str) {
     assert_eq!(value.len(), 16, "{label}: digest長が16でない: {value}");
     assert!(
@@ -4629,10 +4788,12 @@ fn corpus_status_counts(manifest: &CorpusManifest) -> (usize, usize) {
     (failures, target_met)
 }
 
+type CorpusRegenerationEvidence<'a> =
+    (&'a [Stage3cRunRecord], &'a [Vec<Option<CandidateMetric>>]);
+
 fn assert_regenerated_manifest(
     manifest: &CorpusManifest,
-    functional_records: &[Stage3cRunRecord],
-    baseline_metrics: &[Vec<Option<CandidateMetric>>],
+    evidence: Option<CorpusRegenerationEvidence<'_>>,
 ) -> (usize, usize) {
     assert_eq!(manifest.cases.len(), 31);
     assert_eq!(manifest.planned_slots.len(), 30);
@@ -4658,8 +4819,10 @@ fn assert_regenerated_manifest(
     assert_eq!(planned_case_ids.len(), 30);
     assert_eq!(target_case_ids.len(), 30);
     assert_eq!(planned_case_ids, target_case_ids);
-    assert_eq!(functional_records.len(), 300);
-    assert_eq!(baseline_metrics.len(), 30);
+    if let Some((functional_records, baseline_metrics)) = evidence {
+        assert_eq!(functional_records.len(), 300);
+        assert_eq!(baseline_metrics.len(), 30);
+    }
     assert_eq!(
         manifest.hash_contract.input_normalization,
         "typed-input-plus-functional-runner-contract-canonical-json-v2"
@@ -4712,15 +4875,17 @@ fn assert_regenerated_manifest(
             .find(|case| case.id == slot.case_id)
             .unwrap_or_else(|| panic!("manifestにcaseがない: {}", slot.case_id));
         assert!(case.counts_toward_target);
-        let first_record = &functional_records[case_index];
-        assert_eq!(first_record.repetition, 1);
-        assert_eq!(first_record.case_id, case.id);
-        assert_candidate_recorded_current(
-            case,
-            &manifest.numeric_policy,
-            &first_record.fingerprint,
-            &baseline_metrics[case_index],
-        );
+        if let Some((functional_records, baseline_metrics)) = evidence {
+            let first_record = &functional_records[case_index];
+            assert_eq!(first_record.repetition, 1);
+            assert_eq!(first_record.case_id, case.id);
+            assert_candidate_recorded_current(
+                case,
+                &manifest.numeric_policy,
+                &first_record.fingerprint,
+                &baseline_metrics[case_index],
+            );
+        }
         if case.recorded_current.assessment.target_met {
             match case.target.class.as_str() {
                 "must_complete" => must_met += 1,
@@ -5218,10 +5383,12 @@ fn write_canonical_pair(
 // 旧条件は`old_failure_count == 9` / `old_target_met == 6`だったが、前者は
 // `Instant`による30,000ms打ち切りの結果なので計算機の負荷で変わり、後者もその
 // 打ち切り結果を含む。新条件は、再生成前manifestのUTF-8改行正規化FNV-1a checksum
-// が承認済みcanonical revision `fbd7eb537e31f68b`であり、旧metricsが同じchecksumを
+// が承認済みcanonical revision `899ebc1647412f0a`であり、旧metricsが同じchecksumを
 // mirrorすること。この置換は9/6を0/7へ緩和するものではなく、再生成元を特定する
 // preconditionを壁時計依存の件数から計算機に依らないcanonical pairへ変えるものである。
-const CORPUS_REGENERATION_SOURCE_MANIFEST_CHECKSUM: &str = "fbd7eb537e31f68b";
+// 旧revision `fbd7eb537e31f68b`からの変更理由は、31件のtime_statusを固定文から
+// 記録済みrelease実測と承認済み上限に基づく構造化判定へ更新したためである。
+const CORPUS_REGENERATION_SOURCE_MANIFEST_CHECKSUM: &str = "899ebc1647412f0a";
 
 fn assert_corpus_regeneration_source_revision(manifest_bytes: &[u8], metrics_bytes: &[u8]) {
     let manifest_checksum = fixture_checksum(manifest_bytes).expect("再生成元manifest checksum");
@@ -5245,6 +5412,69 @@ fn assert_current_corpus_regeneration_source_revision() {
     println!(
         "CORPUS_REGENERATION_SOURCE_REVISION manifest_checksum={} metrics_mirror=matched",
         CORPUS_REGENERATION_SOURCE_MANIFEST_CHECKSUM
+    );
+}
+
+fn regenerate_corpus_assessment_metadata() {
+    let manifest_file = manifest_path();
+    let metrics_file = stage_3c_metrics_path();
+    let original_manifest = fs::read(&manifest_file).expect("旧manifestを読めない");
+    let original_metrics = fs::read(&metrics_file).expect("旧metricsを読めない");
+    assert_corpus_regeneration_source_revision(&original_manifest, &original_metrics);
+
+    let mut manifest: CorpusManifest =
+        serde_json::from_slice(&original_manifest).expect("旧manifestを解釈できない");
+    let immutable_before = assessment_regeneration_immutable_contract(&manifest);
+    let (failure_count_before, target_met_before) = corpus_status_counts(&manifest);
+    for case in &mut manifest.cases {
+        case.recorded_current.time_budget.limit_status = "approved_limits_unchanged".to_owned();
+        case.recorded_current.assessment = calculate_recorded_assessment(
+            &case.target,
+            &case.recorded_current,
+            &manifest.numeric_policy,
+        );
+    }
+    assert_eq!(
+        assessment_regeneration_immutable_contract(&manifest),
+        immutable_before,
+        "assessment metadata更新が入力・class・目標・現在値・上限を変えた"
+    );
+    let (failure_count_after, target_met_after) = corpus_status_counts(&manifest);
+    assert_eq!(failure_count_after, failure_count_before);
+    assert_eq!(target_met_after, target_met_before);
+
+    let mut manifest_bytes = serde_json::to_vec_pretty(&manifest).expect("manifest JSON");
+    manifest_bytes.push(b'\n');
+    let parsed_manifest: CorpusManifest =
+        serde_json::from_slice(&manifest_bytes).expect("更新manifest schema");
+    assert_eq!(
+        assessment_regeneration_immutable_contract(&parsed_manifest),
+        immutable_before
+    );
+    assert_eq!(
+        assert_regenerated_manifest(&parsed_manifest, None),
+        (failure_count_before, target_met_before)
+    );
+
+    let mut metrics: Stage3cMetricsFixture =
+        serde_json::from_slice(&original_metrics).expect("旧metrics schema");
+    metrics.fixture_integrity.manifest_checksum =
+        fixture_checksum(&manifest_bytes).expect("更新manifest checksum");
+    let mut metrics_bytes = serde_json::to_vec_pretty(&metrics).expect("metrics JSON");
+    metrics_bytes.push(b'\n');
+
+    write_canonical_pair(
+        &manifest_bytes,
+        &metrics_bytes,
+        &original_manifest,
+        &original_metrics,
+    );
+    println!(
+        "CORPUS_ASSESSMENT_REGENERATION_COMPLETE cases={} target_met={}/30 source_checksum={} new_checksum={} limits_unchanged=true",
+        parsed_manifest.cases.len(),
+        target_met_after,
+        CORPUS_REGENERATION_SOURCE_MANIFEST_CHECKSUM,
+        fixture_checksum(&manifest_bytes).expect("更新manifest checksum")
     );
 }
 
@@ -5470,8 +5700,10 @@ fn regenerate_corpus_from_evidence() {
         target_contract_before,
         predeclared_target_contract(&parsed_manifest)
     );
-    let (new_failure_count, new_target_met) =
-        assert_regenerated_manifest(&parsed_manifest, &functional_records, &baseline_metrics);
+    let (new_failure_count, new_target_met) = assert_regenerated_manifest(
+        &parsed_manifest,
+        Some((&functional_records, &baseline_metrics)),
+    );
     let (mut cases, performance, outliers, gate_proposal) =
         stage_3c_performance_evidence(&performance_records, &performance_rounds, &parsed_manifest);
     for (case_index, case_metrics) in cases.iter_mut().enumerate() {
