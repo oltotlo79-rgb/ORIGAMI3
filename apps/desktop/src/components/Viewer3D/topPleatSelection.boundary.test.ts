@@ -186,58 +186,6 @@ function rustPublicFields(block: string): string[] {
   );
 }
 
-function topPleatTypeDiagnostics(): string[] {
-  const probePath = join(
-    TEST_DIR,
-    "../../__topPleatSelectionContractProbe.ts",
-  );
-  const probe = `
-import type { GrabSelection } from "./components/Viewer3D/grabFold";
-import type { FoldTargetSelection } from "./store/appStore";
-
-const validGrab: GrabSelection = { mode: "topPleats", topPleatCount: 2 };
-const validFold: FoldTargetSelection = { target: "topPleats", topPleatCount: 2 };
-const missingGrabCount: GrabSelection = { mode: "topPleats" };
-const missingFoldCount: FoldTargetSelection = { target: "topPleats" };
-void [validGrab, validFold, missingGrabCount, missingFoldCount];
-`;
-  const options: ts.CompilerOptions = {
-    target: ts.ScriptTarget.ES2020,
-    module: ts.ModuleKind.ESNext,
-    moduleResolution: ts.ModuleResolutionKind.Bundler,
-    jsx: ts.JsxEmit.ReactJSX,
-    strict: true,
-    noEmit: true,
-    skipLibCheck: true,
-  };
-  const host = ts.createCompilerHost(options, true);
-  const originalFileExists = host.fileExists.bind(host);
-  const originalReadFile = host.readFile.bind(host);
-  const originalGetSourceFile = host.getSourceFile.bind(host);
-  const pathKey = (fileName: string): string =>
-    fileName.replace(/\\/g, "/").toLowerCase();
-  const isProbe = (fileName: string) => pathKey(fileName) === pathKey(probePath);
-  host.fileExists = (fileName) => isProbe(fileName) || originalFileExists(fileName);
-  host.readFile = (fileName) => (isProbe(fileName) ? probe : originalReadFile(fileName));
-  host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) =>
-    isProbe(fileName)
-      ? ts.createSourceFile(fileName, probe, languageVersion, true, ts.ScriptKind.TS)
-      : originalGetSourceFile(
-          fileName,
-          languageVersion,
-          onError,
-          shouldCreateNewSourceFile,
-        );
-  const program = ts.createProgram({ rootNames: [probePath], options, host });
-  return ts
-    .getPreEmitDiagnostics(program)
-    .filter((diagnostic) => diagnostic.file && isProbe(diagnostic.file.fileName))
-    .map(
-      (diagnostic) =>
-        `${diagnostic.code}: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, " ")}`,
-    );
-}
-
 /** 単位正方形1枚・手順1つの、合わせ折りを確定できる状態。 */
 function seedFlat(): void {
   const doc: DocumentView["doc"] = {
@@ -325,11 +273,18 @@ beforeEach(() => {
 });
 
 describe("上からKひだを選ぶ境界", () => {
-  it("topPleatsはK無しで組み立てられず、K付きだけを型が受け入れる", () => {
-    expect(topPleatTypeDiagnostics()).toEqual([
-      expect.stringMatching(/^\d+: .*topPleatCount/),
-      expect.stringMatching(/^\d+: .*topPleatCount/),
-    ]);
+  it("K有無の型契約は5秒枠外の専用scriptからlint関門へ接続する", () => {
+    const contract = source("../../../scripts/check-type-contracts.mjs");
+    const packageJson = JSON.parse(source("../../../package.json")) as {
+      scripts: Record<string, string>;
+    };
+    expect(contract).toContain("validDiagnostics.length !== 0");
+    expect(contract).toContain("missingDiagnostics.length !== 2");
+    expect(contract).toContain('.includes("topPleatCount")');
+    expect(packageJson.scripts["typecheck:contracts"]).toBe(
+      "node scripts/check-type-contracts.mjs",
+    );
+    expect(packageJson.scripts.lint).toContain("npm run typecheck:contracts");
   });
 
   it("K指定はPreviewとApplyへKだけを送り、面IDを送らない", async () => {
@@ -337,7 +292,7 @@ describe("上からKひだを選ぶ境界", () => {
       { kind: "point", p: [0, 0] },
       { kind: "point", p: [1, 0] },
     ]);
-    // 実装前にもwire契約を赤くできるよう、型の合否自体は上のcompiler検査へ分離する。
+    // 型の合否自体は scripts/check-type-contracts.mjs の専用検査へ分離する。
     useAppStore.getState().updateFoldDraft({
       target: "topPleats",
       topPleatCount: 2,

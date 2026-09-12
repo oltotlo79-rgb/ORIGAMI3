@@ -8,8 +8,9 @@
     "dev": "vite",
     "build": "tsc && vite build --configLoader runner",
     "export-help": "node ./node_modules/tsx/dist/cli.mjs scripts/export-help-content.ts",
-    "lint": "eslint .",
+    "lint": "eslint . && npm run typecheck:contracts",
     "test": "vitest run --configLoader runner",
+    "typecheck:contracts": "node scripts/check-type-contracts.mjs",
     "test:backface-canonical-cdp": "node tests-live/backface-canonical-cdp.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
