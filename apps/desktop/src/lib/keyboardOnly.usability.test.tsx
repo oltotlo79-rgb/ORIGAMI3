@@ -423,8 +423,11 @@ function tabStops(root: HTMLElement): HTMLElement[] {
 }
 
 /** jsdomが省くTabのブラウザ既定動作だけを補い、keydown/keyup自体はDOMへ送る。 */
-function pressTab(root: HTMLElement, shiftKey = false): HTMLElement {
-  const stops = tabStops(root);
+function pressTab(
+  root: HTMLElement,
+  shiftKey = false,
+  stops = tabStops(root),
+): HTMLElement {
   if (stops.length === 0) throw new Error("Tabで辿る対象がありません");
   const active = document.activeElement as HTMLElement | null;
   const keyTarget = active ?? document.body;
@@ -543,7 +546,7 @@ function expectEveryTabStopReachable(root: HTMLElement): void {
   focusFromBody();
   const forward = new Set<HTMLElement>();
   for (const target of expected) {
-    const focused = pressTab(root);
+    const focused = pressTab(root, false, expected);
     expect(focused).toBe(target);
     expect(document.activeElement).toBe(target);
     expect(target.matches(":focus")).toBe(true);
@@ -555,7 +558,7 @@ function expectEveryTabStopReachable(root: HTMLElement): void {
   focusFromBody();
   const backward = new Set<HTMLElement>();
   for (const target of [...expected].reverse()) {
-    const focused = pressTab(root, true);
+    const focused = pressTab(root, true, expected);
     expect(focused).toBe(target);
     expect(document.activeElement).toBe(target);
     expect(isDisplayedFocusTarget(target)).toBe(true);
@@ -812,22 +815,24 @@ describe("施策9: マウスを使わない一続きの操作", () => {
     const mountain = screen.getByRole("button", { name: "山" }) as HTMLButtonElement;
     focusFromBody();
     tabTo(root, mountain);
-    pressEnterOnButton(mountain);
+    await act(async () => {
+      pressEnterOnButton(mountain);
+    });
     tabTo(root, canvas);
-    await waitFor(() => expect(overlay().keyboardCursor).toEqual([0.5, 0.5]));
+    expect(overlay().keyboardCursor).toEqual([0.5, 0.5]);
     pressTab(root);
-    await waitFor(() => expect(overlay().keyboardCursor).toBeNull());
+    expect(overlay().keyboardCursor).toBeNull();
     expect(document.activeElement).not.toBe(canvas);
 
     const foldAll = screen.getByRole("button", {
       name: /全部いっぺんに折ってみる/,
     }) as HTMLButtonElement;
     tabTo(root, foldAll);
-    await act(async () => pressEnterOnButton(foldAll));
-    expect(await screen.findByText("これは仮の形です")).toBeTruthy();
-    await waitFor(() =>
-      expect(useAppStore.getState().foldAllPreview?.appliedPercent).toBe(0),
-    );
+    await act(async () => {
+      pressEnterOnButton(foldAll);
+    });
+    expect(screen.getByText("これは仮の形です")).toBeTruthy();
+    expect(useAppStore.getState().foldAllPreview?.appliedPercent).toBe(0);
     const slider = screen.getByRole("slider", {
       name: "全部の折り目を動かす割合",
     }) as HTMLInputElement;
@@ -840,10 +845,10 @@ describe("施策9: マウスを使わない一続きの操作", () => {
     expect(useAppStore.getState().foldAllPreview?.returning).toBe(false);
     expect(screen.getByText("これは仮の形です")).toBeTruthy();
     tabTo(root, slider);
-    pressRangeEnd(slider);
-    await waitFor(() =>
-      expect(useAppStore.getState().foldAllPreview?.appliedPercent).toBe(100),
-    );
+    await act(async () => {
+      pressRangeEnd(slider);
+    });
+    expect(useAppStore.getState().foldAllPreview?.appliedPercent).toBe(100);
     expectEveryTabStopReachable(root);
   });
 
