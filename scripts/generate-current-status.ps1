@@ -16,6 +16,12 @@ param(
 #
 # 段階7-Cでは-Check時にdocs/progress.mdのmarkerを照合する。markerの更新と
 # CI配置はこのscript自身では行わず、MarkerFixturesは生成物・実文書をgateしない。
+#
+# 行末: gitは追跡fileをLFで保存し、core.autocrlf=trueのWindows(GitHubの
+# windows-latestとこの作業機の両方)はCRLFへ変えて取り出す。追跡sourceを文字として
+# 読む入口(Read-TrackedText)でLFへそろえ、取り出し方によらず同じ結果にする。
+# 行末fixture(Invoke-LineEndingFixtureSuite)は-Checkと-MarkerFixturesの両方で
+# 毎回走り、同じ中身のLF版とCRLF版で結果が一致することを確かめる。
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
@@ -337,16 +343,34 @@ function Read-TrackedBytes {
     return ,$bytes
 }
 
+function ConvertTo-LfLineEnding {
+    param([AllowEmptyString()][string]$Text)
+
+    # 行末の違いは取り出し方の違いであって、中身の違いではない。gitは行末をLFで
+    # 保存し、core.autocrlf=trueのWindowsは取り出すときにCRLFへ変える。.NETの
+    # 複数行モードの$は\nの直前にしか一致せず\rの直前には一致しないため、CRLFの
+    # まま正規表現へ渡すと、行末を$で押さえる照合が0件になる。
+    # 実測(2026-10-04): 定時CIのcurrent_statusが08-29から毎日「[workspace.package].version
+    # を1つに特定できません(matches=0)」で止まっていた。CIログのsource_sha256は、
+    # 78afa0eをautocrlf=trueで取り出した776 fileと全byte一致し、同じ関数はCRLFの
+    # Cargo.tomlで0件、LFのCargo.tomlで0.5.0を返した。行末でない単独のCRは変えない。
+    return $Text.Replace("`r`n", "`n")
+}
+
 function Read-TrackedText {
     param([string]$RelativePath, [string]$BaseRoot = $script:Root)
 
     $bytes = Read-TrackedBytes $RelativePath $BaseRoot
     try {
-        return $script:Utf8NoBom.GetString($bytes)
+        $text = $script:Utf8NoBom.GetString($bytes)
     }
     catch {
         throw "UTF-8として読めません: $RelativePath ($($_.Exception.Message))"
     }
+    # 追跡sourceを文字として読む入口はここ1か所なので、ここで行末をLFへそろえる。
+    # byte列の照合とhash(Read-TrackedBytes・Get-SourceManifestHash・cache key)は
+    # 取り出したままのbyteで行い、ここでは変えない。
+    return ConvertTo-LfLineEnding $text
 }
 
 function Get-OrdinalSortedStrings {
@@ -3651,6 +3675,134 @@ function Invoke-MarkerFixtureSuite {
     }
 }
 
+function Remove-LineEndingFixtureRoot {
+    param([string]$Path)
+
+    $full = [System.IO.Path]::GetFullPath($Path).TrimEnd([char[]]"\/")
+    $temp = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd([char[]]"\/")
+    $parent = [System.IO.Path]::GetDirectoryName($full).TrimEnd([char[]]"\/")
+    $leaf = [System.IO.Path]::GetFileName($full)
+    if (-not [string]::Equals($parent, $temp, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $leaf -cnotmatch '^ori3-current-status-eol-fixture-[0-9a-f]{32}$') {
+        throw "安全な行末fixture pathではありません: $Path"
+    }
+    if ([System.IO.Directory]::Exists($full)) {
+        Assert-SnapshotCacheTreeHasNoReparsePoints $full
+        [System.IO.Directory]::Delete($full, $true)
+    }
+}
+
+function Invoke-LineEndingFixtureSuite {
+    # GitHubのwindows-latestとこの作業機は、どちらもcore.autocrlf=trueで追跡fileを
+    # CRLFへ変えて取り出す(2026-10-04 実測: 定時CIのログのsource_sha256が、78afa0eを
+    # autocrlf=trueで取り出した776 fileと全byte一致)。同じ中身をLFとCRLFの2通りで
+    # 書いた使い捨ての木を作り、実際の読み込み口(Read-TrackedText)と、version・
+    # members・印照合の関数へ通して、2通りで結果が同じになることを確かめる。
+    # 行末をそろえる前の読み込み口では、CRLF側のversionが定時CIと同じ
+    # 「[workspace.package].version を1つに特定できません(matches=0)」で赤になる。
+    $fixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ori3-current-status-eol-fixture-" + [Guid]::NewGuid().ToString("N"))
+    $savedTrackedSet = $script:TrackedSet
+    $savedSnapshotRoot = $script:SnapshotRoot
+    $status = New-MarkerFixtureStatus
+    $nonce = [Guid]::NewGuid().ToString("N")
+    $tokens = [ordered]@{}
+    foreach ($metricId in @("workspace_version", "workspace_members", "tauri_commands", "test_inventory", "proposal_budgets", "manual_pages")) {
+        $tokens[$metricId] = "eol-fixture-$metricId-$nonce"
+    }
+    $markdown = New-MarkerFixtureMarkdown $tokens
+    $expectedVersion = "9.8.7"
+    $expectedMembers = [string[]]@("crates/eol-fixture", "apps/desktop/src-tauri")
+    $files = [ordered]@{
+        "Cargo.toml" = (@(
+            '[workspace]',
+            'resolver = "2"',
+            'members = [',
+            '    "crates/eol-fixture",',
+            '    "apps/desktop/src-tauri",',
+            ']',
+            '',
+            '[workspace.package]',
+            ('version = "{0}"' -f $expectedVersion),
+            'edition = "2024"',
+            ''
+        ) -join "`n")
+        "crates/eol-fixture/Cargo.toml" = "[package]`nname = `"eol-fixture`"`n"
+        "apps/desktop/src-tauri/Cargo.toml" = "[package]`nname = `"eol-fixture-host`"`n"
+        "docs/progress.md" = "# line-ending fixture progress`n`n" + $markdown + "`nfixture body`n"
+    }
+    $passed = 0
+    $total = 8
+    try {
+        foreach ($variant in @("LF", "CRLF")) {
+            $root = Join-Path $fixtureRoot $variant.ToLowerInvariant()
+            $trackedSet = New-Object 'System.Collections.Generic.HashSet[string]' ($script:Ordinal)
+            foreach ($relative in $files.Keys) {
+                $content = [string]$files[$relative]
+                if ($variant -eq "CRLF") {
+                    $content = $content.Replace("`n", "`r`n")
+                }
+                $path = Get-AbsoluteRepositoryPath $relative $root
+                [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($path))
+                [System.IO.File]::WriteAllBytes($path, $script:Utf8NoBom.GetBytes($content))
+                [void]$trackedSet.Add($relative)
+            }
+            foreach ($relative in $files.Keys) {
+                $written = [System.IO.File]::ReadAllBytes((Get-AbsoluteRepositoryPath $relative $root))
+                $lineFeeds = 0
+                $carriageReturns = 0
+                foreach ($byte in $written) {
+                    if ($byte -eq 10) { $lineFeeds++ }
+                    elseif ($byte -eq 13) { $carriageReturns++ }
+                }
+                $expectedCarriageReturns = if ($variant -eq "CRLF") { $lineFeeds } else { 0 }
+                if ($lineFeeds -eq 0 -or $carriageReturns -ne $expectedCarriageReturns) {
+                    throw "line-ending fixture $variant did not write the intended line endings: $relative (LF=$lineFeeds, CR=$carriageReturns)"
+                }
+            }
+            $script:TrackedSet = $trackedSet
+            $script:SnapshotRoot = $root
+            $label = "line-ending fixture $variant"
+            try {
+                $version = Get-CargoWorkspaceVersionValue (Read-TrackedText "Cargo.toml" $root)
+                if (-not [string]::Equals($version, $expectedVersion, [System.StringComparison]::Ordinal)) {
+                    throw "workspace_version differs(actual=$version, expected=$expectedVersion)"
+                }
+                $passed++
+                $members = [string[]]@(Get-WorkspaceMemberValues (Read-TrackedText "Cargo.toml" $root))
+                if (-not (Test-OrdinalSequenceEqual $members $expectedMembers)) {
+                    throw "workspace_members differ(actual=[$($members -join ',')], expected=[$($expectedMembers -join ',')])"
+                }
+                $passed++
+                $progressText = Read-TrackedText "docs/progress.md" $root
+                Assert-MarkerFixtureResult "$label clean" (Invoke-CurrentStatusMarkerGate $markdown $status $progressText) 0
+                $passed++
+                $versionToken = [string]$tokens["workspace_version"]
+                $driftedProgress = $progressText.Replace($versionToken, $versionToken + "-relative-delta")
+                if ([string]::Equals($driftedProgress, $progressText, [System.StringComparison]::Ordinal)) {
+                    throw "could not mutate the workspace_version token"
+                }
+                Assert-MarkerFixtureResult "$label workspace_version drift" (Invoke-CurrentStatusMarkerGate $markdown $status $driftedProgress) 1 "workspace_version"
+                $passed++
+            }
+            catch {
+                throw "$label failed($passed/$total passed before it): $($_.Exception.Message)"
+            }
+        }
+    }
+    finally {
+        $script:TrackedSet = $savedTrackedSet
+        $script:SnapshotRoot = $savedSnapshotRoot
+        Remove-LineEndingFixtureRoot $fixtureRoot
+    }
+    if ($passed -ne $total) {
+        throw "line-ending fixtures did not all run($passed/$total)"
+    }
+    return [PSCustomObject][ordered]@{
+        Passed = [int]$passed
+        Total = [int]$total
+    }
+}
+
 function Get-AllMirrorDrifts {
     param([System.Collections.IDictionary]$Status)
     $drifts = New-Object System.Collections.Generic.List[object]
@@ -3771,6 +3923,8 @@ try {
     if ($MarkerFixtures) {
         $fixtureResult = Invoke-MarkerFixtureSuite
         Write-Host ("marker fixtures: {0}/{1} passed; metric drift diagnostics: {2}/6" -f $fixtureResult.Passed, $fixtureResult.Total, $fixtureResult.MetricDrifts)
+        $lineEndingResult = Invoke-LineEndingFixtureSuite
+        Write-Host ("line-ending fixtures: {0}/{1} passed; LF and CRLF checkouts gave the same version, members, and marker results" -f $lineEndingResult.Passed, $lineEndingResult.Total)
         Write-Host "tracked sources, real progress marker, mirrors, Cargo, and generated outputs: bypassed in MarkerFixtures"
         $scriptExitCode = 0
     }
@@ -3778,6 +3932,9 @@ try {
         if ($null -ne $script:CargoTargetError) {
             throw $script:CargoTargetError
         }
+        # 収集の前に、CIと同じCRLFの取り出しでも読み方が変わらないことを確かめる。
+        $lineEndingResult = Invoke-LineEndingFixtureSuite
+        Write-Host ("line-ending fixtures: {0}/{1} passed; LF and CRLF checkouts gave the same version, members, and marker results" -f $lineEndingResult.Passed, $lineEndingResult.Total)
         $rootResult = Invoke-GitCapture @("rev-parse", "--show-toplevel")
     $gitRoot = [System.IO.Path]::GetFullPath($rootResult.StdOut.Trim()).TrimEnd([char[]]"\/")
     if (-not [string]::Equals($gitRoot, $script:Root, [System.StringComparison]::OrdinalIgnoreCase)) {
